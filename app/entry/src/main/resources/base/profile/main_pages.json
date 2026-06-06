@@ -1,0 +1,8 @@
+﻿{
+  "src": [
+    "pages/Index",
+    "pages/ConnectionListPage",
+    "pages/ChatPage",
+    "pages/QRScannerPage"
+  ]
+}
