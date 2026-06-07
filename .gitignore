@@ -1,4 +1,4 @@
-node_modules/
+﻿node_modules/
 dist/
 .env
 *.log
@@ -6,3 +6,16 @@ dist/
 coverage/
 .vscode/
 .idea/
+
+# HarmonyOS build artifacts
+app/.hvigor/
+app/entry/build/
+app/oh_modules/
+app/oh-package-lock.json5
+app/build/
+
+# Test and fix scripts
+test_bt.js
+test_script.js
+fix_build.js
+fix_ets.js

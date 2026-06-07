@@ -1,4 +1,4 @@
-﻿import { webview, Webview } from '@kit.WebKit';
+import webview from '@ohos.web.webview';
 import router from '@ohos.router';
 
 interface ReviewPageParams {
@@ -13,8 +13,8 @@ struct ReviewPage {
   @State title: string = 'Code Review';
   @State isLoading: boolean = true;
   @State loadProgress: number = 0;
-  
-  private controller: WebviewController | null = null;
+
+  private controller: webview.WebviewController = new webview.WebviewController();
 
   aboutToAppear() {
     const params = router.getParams() as ReviewPageParams;
@@ -28,10 +28,9 @@ struct ReviewPage {
 
   build() {
     Column() {
-      // Header
       Row() {
         Button({ type: ButtonType.Circle }) {
-          Text('←')
+          Text('\u2190')
             .fontSize(20)
         }
         .width(40)
@@ -49,20 +48,19 @@ struct ReviewPage {
           .textOverflow({ overflow: TextOverflow.Ellipsis })
 
         Button({ type: ButtonType.Normal }) {
-          Text('↻')
+          Text('\u21bb')
             .fontSize(20)
         }
         .width(40)
         .height(40)
         .onClick(() => {
-          this.controller?.refresh();
+          this.controller.refresh();
         })
       }
       .width('100%')
       .padding({ left: 16, right: 16, top: 12, bottom: 12 })
       .backgroundColor('#ffffff')
 
-      // Progress bar
       if (this.isLoading) {
         Progress({ value: this.loadProgress, total: 100 })
           .width('100%')
@@ -70,7 +68,6 @@ struct ReviewPage {
           .color('#52c41a')
       }
 
-      // WebView
       Web({ src: this.url, controller: this.controller })
         .width('100%')
         .layoutWeight(1)

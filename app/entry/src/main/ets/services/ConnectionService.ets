@@ -1,14 +1,15 @@
-﻿import { Connection } from '../models/index';
+import { Connection } from '../models/index';
+import { preferences } from '@kit.ArkData';
 
 const CONNECTIONS_KEY = 'saved_connections';
 
 export class ConnectionService {
   private connections: Map<string, Connection> = new Map();
-  private preferences: preferences.Preferences | null = null;
+  private prefs: preferences.Preferences | null = null;
 
   async init(context: Context): Promise<void> {
     try {
-      this.preferences = await preferences.getPreferences(context, 'connections');
+      this.prefs = await preferences.getPreferences(context, 'connections');
       await this.loadConnections();
     } catch (e) {
       console.error('[ConnectionService] Failed to init:', e);
@@ -16,24 +17,26 @@ export class ConnectionService {
   }
 
   private async loadConnections(): Promise<void> {
-    if (!this.preferences) return;
-    
+    if (!this.prefs) return;
+
     try {
-      const data = await this.preferences.get(CONNECTIONS_KEY, '[]');
+      const data = await this.prefs.get(CONNECTIONS_KEY, '[]');
       const connections: Connection[] = JSON.parse(data as string);
-      connections.forEach(conn => this.connections.set(conn.id, conn));
+      for (let i = 0; i < connections.length; i++) {
+        this.connections.set(connections[i].id, connections[i]);
+      }
     } catch (e) {
       console.error('[ConnectionService] Failed to load connections:', e);
     }
   }
 
   private async saveConnections(): Promise<void> {
-    if (!this.preferences) return;
-    
+    if (!this.prefs) return;
+
     try {
       const connections = Array.from(this.connections.values());
-      await this.preferences.put(CONNECTIONS_KEY, JSON.stringify(connections));
-      await this.preferences.flush();
+      await this.prefs.put(CONNECTIONS_KEY, JSON.stringify(connections));
+      await this.prefs.flush();
     } catch (e) {
       console.error('[ConnectionService] Failed to save connections:', e);
     }
@@ -55,8 +58,17 @@ export class ConnectionService {
   async update(id: string, updates: Partial<Connection>): Promise<void> {
     const existing = this.connections.get(id);
     if (existing) {
-      const updated = { ...existing, ...updates };
-      this.connections.set(id, updated);
+      if (updates.id !== undefined) existing.id = updates.id;
+      if (updates.name !== undefined) existing.name = updates.name;
+      if (updates.mode !== undefined) existing.mode = updates.mode;
+      if (updates.host !== undefined) existing.host = updates.host;
+      if (updates.port !== undefined) existing.port = updates.port;
+      if (updates.publicKey !== undefined) existing.publicKey = updates.publicKey;
+      if (updates.token !== undefined) existing.token = updates.token;
+      if (updates.relayUrl !== undefined) existing.relayUrl = updates.relayUrl;
+      if (updates.isOnline !== undefined) existing.isOnline = updates.isOnline;
+      if (updates.lastConnected !== undefined) existing.lastConnected = updates.lastConnected;
+      this.connections.set(id, existing);
       await this.saveConnections();
     }
   }

@@ -11,6 +11,14 @@
     {
       "name": "EntryAbility_label",
       "value": "label"
+    },
+    {
+      "name": "camera_reason",
+      "value": "用于扫描QR码以连接桌面网关"
+    },
+    {
+      "name": "microphone_reason",
+      "value": "用于语音输入与网关进行交互"
     }
   ]
 }

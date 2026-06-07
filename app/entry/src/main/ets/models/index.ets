@@ -1,4 +1,4 @@
-﻿export interface QRCodeData {
+export interface QRCodeData {
   mode: 'direct' | 'relay';
   name: string;
   host: string;
@@ -43,9 +43,25 @@ export type MessageType =
   | 'error'
   | 'heartbeat';
 
+export interface MessageData {
+  content?: string;
+  name?: string;
+  parameters?: string;
+  result?: string;
+  description?: string;
+  requestId?: string;
+  allowed?: boolean;
+  url?: string;
+  sessions?: Session[];
+  sessionId?: string;
+  total?: number;
+  limit?: number;
+  message?: string;
+}
+
 export interface Message {
   type: MessageType;
   id: string;
-  data: any;
+  data: MessageData;
   timestamp: number;
 }

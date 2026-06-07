@@ -1,10 +1,9 @@
 {
   "name": "entry",
   "version": "1.0.0",
-  "description": "Please describe the basic information.",
+  "description": "DCode mobile app - HarmonyOS client for opencode",
   "main": "",
   "author": "",
   "license": "",
   "dependencies": {}
 }
-

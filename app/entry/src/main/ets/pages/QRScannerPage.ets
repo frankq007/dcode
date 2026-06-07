@@ -1,4 +1,4 @@
-﻿import { QRCodeData, Connection } from '../models/index';
+import { QRCodeData, Connection } from '../models/index';
 import { connectionService } from '../services/ConnectionService';
 import { scanBarcode, scanCore } from '@kit.ScanKit';
 import { promptAction } from '@kit.ArkUI';
@@ -17,12 +17,11 @@ struct QRScannerPage {
 
   async startScan() {
     try {
-      const options: scanCore.ScanOptions = {
-        scanTypes: [scanCore.ScanType.QR_CODE],
-        enableMultiScan: false
+      const options: scanBarcode.ScanOptions = {
+        scanTypes: [scanCore.ScanType.QR_CODE]
       };
-      
-      const result = await scanBarcode.startScanForResult(options);
+
+      const result = await scanBarcode.startScanForResult(getContext(this), options);
       this.handleScanResult(result.originalValue);
     } catch (e) {
       console.error('[QRScanner] Scan error:', e);
@@ -79,7 +78,6 @@ struct QRScannerPage {
 
   build() {
     Stack() {
-      // Camera preview area (placeholder)
       Column() {
         Text('请将二维码放入框内扫描')
           .fontSize(16)
@@ -91,9 +89,8 @@ struct QRScannerPage {
       .backgroundColor('#000000')
       .justifyContent(FlexAlign.Center)
 
-      // Back button
       Button({ type: ButtonType.Circle }) {
-        Text('←')
+        Text('\u2190')
           .fontSize(24)
           .fontColor('#ffffff')
       }
@@ -105,7 +102,6 @@ struct QRScannerPage {
         router.back();
       })
 
-      // Action panel
       if (this.showActionPanel && this.parsedQRData) {
         Column() {
           Text(this.parsedQRData.name)
