@@ -19,6 +19,8 @@ struct ChatPage {
   @State sessions: Session[] = [];
   @State isConnected: boolean = false;
   @State tokenUsage: string = '0/4k';
+  @State isRecording: boolean = false;
+  @State reviewUrl: string = '';
   
   private connection: Connection | null = null;
 
@@ -28,7 +30,22 @@ struct ChatPage {
     if (params?.connectionId) {
       this.connection = connectionService.get(params.connectionId) || null;
     } else if (params?.qrData) {
-      // Temporary connection from QR scan
+      try {
+        const qrData = JSON.parse(params.qrData);
+        this.connection = {
+          id: `temp_${Date.now()}`,
+          name: qrData.name,
+          mode: qrData.mode,
+          host: qrData.host,
+          port: qrData.port,
+          publicKey: qrData.publicKey,
+          token: qrData.token,
+          relayUrl: qrData.relayUrl,
+          isOnline: false
+        };
+      } catch (e) {
+        console.error('[ChatPage] Parse QR data error:', e);
+      }
     }
 
     this.setupWebSocket();
@@ -49,6 +66,9 @@ struct ChatPage {
 
     webSocketService.onConnectionChange((connected: boolean) => {
       this.isConnected = connected;
+      if (connected && this.connection) {
+        connectionService.updateOnlineStatus(this.connection.id, true);
+      }
     });
 
     webSocketService.onMessage((message: Message) => {
@@ -68,6 +88,11 @@ struct ChatPage {
         createdAt: Date.now(),
         lastActivity: Date.now()
       };
+    } else if (message.type === 'token_info') {
+      const usage = message.data;
+      this.tokenUsage = `${usage.total || 0}/${usage.contextWindow || 4000}`;
+    } else if (message.type === 'review_url') {
+      this.reviewUrl = message.data.url;
     } else {
       this.messages.push(message);
     }
@@ -110,6 +135,28 @@ struct ChatPage {
     webSocketService.sendMessage(message);
   }
 
+  openReviewPage() {
+    if (this.reviewUrl) {
+      router.pushUrl({
+        url: 'pages/ReviewPage',
+        params: { url: this.reviewUrl, title: 'Code Review' }
+      });
+    } else {
+      promptAction.showToast({ message: 'No review URL available' });
+    }
+  }
+
+  startVoiceInput() {
+    this.isRecording = true;
+    // TODO: Implement HarmonyOS ASR
+    // Using system voice recognition API
+    promptAction.showToast({ message: 'Voice input not yet implemented' });
+    
+    setTimeout(() => {
+      this.isRecording = false;
+    }, 3000);
+  }
+
   build() {
     Column() {
       // Header
@@ -130,8 +177,19 @@ struct ChatPage {
             .fontSize(16)
             .fontWeight(FontWeight.Bold)
             .onClick(() => {
-              // Show session switcher
+              this.showSessionSwitcher();
             })
+          
+          Row() {
+            Circle({ width: 8, height: 8 })
+              .fill(this.isConnected ? '#52c41a' : '#ff4d4f')
+              .margin({ right: 4 })
+            
+            Text(this.isConnected ? '已连接' : '未连接')
+              .fontSize(11)
+              .fontColor('#999999')
+          }
+          .margin({ top: 2 })
         }
         .alignItems(HorizontalAlign.Start)
         .layoutWeight(1)
@@ -144,6 +202,17 @@ struct ChatPage {
           .padding({ left: 8, right: 8, top: 4, bottom: 4 })
           .borderRadius(12)
           .backgroundColor('#f6ffed')
+
+        // Menu button
+        Button({ type: ButtonType.Normal }) {
+          Text('⋮')
+            .fontSize(20)
+        }
+        .width(40)
+        .height(40)
+        .onClick(() => {
+          this.showMenu();
+        })
       }
       .width('100%')
       .padding({ left: 16, right: 16, top: 12, bottom: 12 })
@@ -164,13 +233,17 @@ struct ChatPage {
 
       // Input bar
       Row() {
+        // Voice input button
         Button({ type: ButtonType.Circle }) {
-          Text('🎤')
+          Text(this.isRecording ? '⏹' : '🎤')
             .fontSize(20)
         }
         .width(44)
         .height(44)
-        .backgroundColor('#f0f0f0')
+        .backgroundColor(this.isRecording ? '#ff4d4f' : '#f0f0f0')
+        .onClick(() => {
+          this.startVoiceInput();
+        })
 
         TextInput({ text: this.inputText, placeholder: '输入消息...' })
           .layoutWeight(1)
@@ -200,7 +273,44 @@ struct ChatPage {
     .backgroundColor('#f5f5f5')
   }
 
+  showSessionSwitcher() {
+    // Show a dialog or bottom sheet with session list
+    promptAction.showActionMenu({
+      title: '切换会话',
+      buttons: [
+        ...this.sessions.map(s => ({ text: s.name, color: '#000000' })),
+        { text: '+ 新建会话', color: '#52c41a' }
+      ]
+    }).then((result: promptAction.ActionMenuSuccessResponse) => {
+      const index = result.index;
+      if (index === this.sessions.length) {
+        this.createSession();
+      } else if (index < this.sessions.length) {
+        this.switchSession(this.sessions[index].id);
+      }
+    });
+  }
+
+  showMenu() {
+    promptAction.showActionMenu({
+      title: '菜单',
+      buttons: [
+        { text: '代码审查', color: '#000000' },
+        { text: '新建会话', color: '#52c41a' }
+      ]
+    }).then((result: promptAction.ActionMenuSuccessResponse) => {
+      if (result.index === 0) {
+        this.openReviewPage();
+      } else if (result.index === 1) {
+        this.createSession();
+      }
+    });
+  }
+
   aboutToDisappear() {
     webSocketService.disconnect();
+    if (this.connection) {
+      connectionService.updateOnlineStatus(this.connection.id, false);
+    }
   }
 }

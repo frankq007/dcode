@@ -1,4 +1,4 @@
-﻿import { generateKeyPairSync, createHash, createCipheriv, createDecipheriv, randomBytes, KeyObject, diffieHellman as ecdhDiffieHellman } from 'crypto';
+import { generateKeyPairSync, createHash, createCipheriv, createDecipheriv, randomBytes, KeyObject, diffieHellman as ecdhDiffieHellman, createPublicKey } from 'crypto';
 
 export interface X25519KeyPair {
   publicKey: Buffer;
@@ -99,7 +99,7 @@ export class CryptoManager {
     const spkiHeader = Buffer.from('302a300506032b656e032100', 'hex');
     const derPublicKey = Buffer.concat([spkiHeader, publicKey]);
     
-    const { createPublicKey } = require('crypto');
+    
     return createPublicKey({
       key: derPublicKey,
       format: 'der',

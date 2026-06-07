@@ -1,4 +1,4 @@
-﻿import { WebSocketServer, WebSocket, RawData } from 'ws';
+﻿import WebSocket from 'ws';
 import { randomUUID, randomBytes } from 'crypto';
 import { CryptoManager } from '../crypto/crypto-manager';
 import { OpencodeClient, OpencodeEvent } from '../opencode/opencode-client';
@@ -6,18 +6,21 @@ import { SessionManager } from '../session/session-manager';
 import { GatewayConfig } from '../config';
 import { HandshakeMessage, Message, QRCodeData } from '../types';
 
-export class DirectServer {
-  private wss: WebSocketServer;
+export class RelayClient {
+  private ws: WebSocket | null = null;
   private crypto: CryptoManager;
   private config: GatewayConfig;
   private token: string;
-  private appWs: WebSocket | null = null;
+  private reconnectAttempts = 0;
+  private maxReconnectAttempts = 10;
+  private reconnectDelay = 1000;
+  private maxReconnectDelay = 30000;
+  private isReconnecting = false;
   private handshakeState: 'waiting' | 'step1' | 'complete' = 'waiting';
   private opencode: OpencodeClient;
   private sessions: SessionManager;
   private sseControllers: Map<string, AbortController> = new Map();
   private seenMessageIds: Set<string> = new Set();
-  private maxMessageSize = 1024 * 1024; // 1MB
 
   constructor(config: GatewayConfig) {
     this.config = config;
@@ -25,75 +28,74 @@ export class DirectServer {
     this.token = randomUUID();
     this.opencode = new OpencodeClient(config.opencodeUrl);
     this.sessions = new SessionManager();
+  }
+
+  start(): void {
+    this.connectToRelay();
+    this.printQRCode();
+  }
+
+  private connectToRelay(): void {
+    console.log(`[Relay] Connecting to ${this.config.relayUrl}`);
     
-    this.wss = new WebSocketServer({ host: config.host, port: config.port });
-    this.setupServer();
-  }
-
-  private setupServer(): void {
-    this.wss.on('listening', () => {
-      console.log(`[Direct] WebSocket server listening on ${this.config.host}:${this.config.port}`);
-      this.printQRCode();
-    });
-
-    this.wss.on('connection', (ws: WebSocket) => {
-      if (this.appWs && this.appWs.readyState === WebSocket.OPEN) {
-        console.log('[Direct] Rejecting new connection: existing app connected');
-        ws.send(JSON.stringify({ type: 'error', data: { message: 'Another app is already connected' } }));
-        ws.close();
-        return;
-      }
-
-      console.log('[Direct] New app connection');
-      this.appWs = ws;
-      this.handshakeState = 'waiting';
+    this.ws = new WebSocket(this.config.relayUrl);
+    
+    this.ws.on('open', () => {
+      console.log('[Relay] Connected to relay server');
+      this.reconnectAttempts = 0;
+      this.reconnectDelay = 1000;
       
-      this.setupAppConnection(ws);
+      const registerMsg = {
+        type: 'register',
+        token: this.token,
+        role: 'gateway'
+      };
+      
+      this.ws?.send(JSON.stringify(registerMsg));
+    });
+
+    this.ws.on('message', (data: WebSocket.RawData) => {
+      this.handleMessage(data);
+    });
+
+    this.ws.on('close', () => {
+      console.log('[Relay] Disconnected from relay server');
+      this.attemptReconnect();
+    });
+
+    this.ws.on('error', (error) => {
+      console.error('[Relay] WebSocket error:', error.message);
     });
   }
 
-  private setupAppConnection(ws: WebSocket): void {
-    ws.on('message', (data: RawData) => {
-      this.handleAppMessage(ws, data);
-    });
+  private handleMessage(data: WebSocket.RawData): void {
+    const message = data.toString();
+    let parsed: any;
+    
+    try {
+      parsed = JSON.parse(message);
+    } catch (e) {
+      console.error('[Relay] Parse error:', e);
+      return;
+    }
 
-    ws.on('close', () => {
-      console.log('[Direct] App disconnected');
-      this.cleanupSSEConnections();
-      this.appWs = null;
-      this.handshakeState = 'waiting';
-      this.seenMessageIds.clear();
-    });
-
-    ws.on('error', (error) => {
-      console.error('[Direct] WebSocket error:', error.message);
-    });
-  }
-
-  private handleAppMessage(ws: WebSocket, data: RawData): void {
-    if (this.handshakeState === 'complete') {
-      const encrypted = JSON.parse(data.toString());
-      try {
-        const decrypted = this.crypto.decrypt(encrypted);
-        const message = JSON.parse(decrypted);
-        this.processDecryptedMessage(message);
-      } catch (e: any) {
-        console.error('[Direct] Decryption/parse error:', e.message);
-      }
+    if (parsed.type === 'waiting') {
+      console.log('[Relay] Waiting for app to connect...');
+    } else if (parsed.type === 'paired') {
+      console.log('[Relay] Paired with app');
+    } else if (parsed.type === 'peer_disconnected') {
+      console.log('[Relay] App disconnected');
+      this.cleanupConnection();
+    } else if (this.handshakeState === 'complete') {
+      this.handleEncryptedMessage(parsed);
     } else {
-      try {
-        const handshake = JSON.parse(data.toString()) as HandshakeMessage;
-        this.handleHandshake(ws, handshake);
-      } catch (e: any) {
-        console.error('[Direct] Handshake parse error:', e.message);
-        ws.close();
-      }
+      this.handleHandshakeMessage(parsed);
     }
   }
 
-  private handleHandshake(ws: WebSocket, msg: HandshakeMessage): void {
+  private handleHandshakeMessage(msg: any): void {
     if (this.handshakeState === 'waiting' && msg.type === 'handshake_init') {
-      console.log(`[Direct] Handshake step 1: received app public key, version=${msg.version}`);
+      console.log(`[Relay] Handshake step 1: received app public key, version=${msg.version}`);
       
       const gatewayNonce = randomBytes(16).toString('base64');
       
@@ -104,21 +106,21 @@ export class DirectServer {
         version: this.config.version
       };
       
-      ws.send(JSON.stringify(ack));
+      this.ws?.send(JSON.stringify(ack));
       this.handshakeState = 'step1';
       
-      (ws as any)._appNonce = msg.nonce;
-      (ws as any)._appPublicKey = msg.publicKey;
-      (ws as any)._gatewayNonce = gatewayNonce;
+      (this as any)._appNonce = msg.nonce;
+      (this as any)._appPublicKey = msg.publicKey;
+      (this as any)._gatewayNonce = gatewayNonce;
     } else if (this.handshakeState === 'step1' && msg.type === 'handshake_complete') {
-      const appNonce = (ws as any)._appNonce;
-      const gatewayNonce = (ws as any)._gatewayNonce;
-      const appPublicKey = (ws as any)._appPublicKey;
+      const appNonce = (this as any)._appNonce;
+      const gatewayNonce = (this as any)._gatewayNonce;
+      const appPublicKey = (this as any)._appPublicKey;
       
       this.crypto.deriveSessionKey(appPublicKey, appNonce, gatewayNonce);
       this.handshakeState = 'complete';
       
-      console.log('[Direct] Handshake complete: session key derived');
+      console.log('[Relay] Handshake complete: session key derived');
       
       const initialSession = this.sessions.create('Default');
       this.startSSESubscription(initialSession.id);
@@ -132,9 +134,19 @@ export class DirectServer {
     }
   }
 
+  private handleEncryptedMessage(encrypted: any): void {
+    try {
+      const decrypted = this.crypto.decrypt(encrypted);
+      const message = JSON.parse(decrypted);
+      this.processDecryptedMessage(message);
+    } catch (e: any) {
+      console.error('[Relay] Decryption/parse error:', e.message);
+    }
+  }
+
   private processDecryptedMessage(message: Message): void {
     if (this.seenMessageIds.has(message.id)) {
-      console.log(`[Direct] Duplicate message ignored: ${message.id}`);
+      console.log(`[Relay] Duplicate message ignored: ${message.id}`);
       return;
     }
     this.seenMessageIds.add(message.id);
@@ -161,7 +173,7 @@ export class DirectServer {
         });
         break;
       default:
-        console.warn(`[Direct] Unknown message type: ${message.type}`);
+        console.warn(`[Relay] Unknown message type: ${message.type}`);
     }
   }
 
@@ -250,36 +262,12 @@ export class DirectServer {
   }
 
   private sendEncryptedMessage(message: Message): void {
-    if (!this.appWs || this.appWs.readyState !== WebSocket.OPEN) return;
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    if (this.handshakeState !== 'complete') return;
     
     const plaintext = JSON.stringify(message);
-    const chunks = this.chunkMessage(plaintext);
-    
-    for (const chunk of chunks) {
-      const encrypted = this.crypto.encrypt(chunk);
-      this.appWs.send(JSON.stringify(encrypted));
-    }
-  }
-
-  private chunkMessage(plaintext: string): string[] {
-    const encoder = new TextEncoder();
-    const encoded = encoder.encode(plaintext);
-    
-    if (encoded.length <= this.maxMessageSize) {
-      return [plaintext];
-    }
-    
-    const chunks: string[] = [];
-    const decoder = new TextDecoder();
-    let offset = 0;
-    
-    while (offset < encoded.length) {
-      const end = Math.min(offset + this.maxMessageSize, encoded.length);
-      chunks.push(decoder.decode(encoded.slice(offset, end)));
-      offset = end;
-    }
-    
-    return chunks;
+    const encrypted = this.crypto.encrypt(plaintext);
+    this.ws.send(JSON.stringify(encrypted));
   }
 
   private sendError(message: string): void {
@@ -298,14 +286,40 @@ export class DirectServer {
     this.sseControllers.clear();
   }
 
+  private cleanupConnection(): void {
+    this.handshakeState = 'waiting';
+    this.seenMessageIds.clear();
+    this.cleanupSSEConnections();
+  }
+
+  private attemptReconnect(): void {
+    if (this.isReconnecting) return;
+    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+      console.error('[Relay] Max reconnect attempts reached');
+      return;
+    }
+
+    this.isReconnecting = true;
+    this.reconnectAttempts++;
+    
+    const delay = Math.min(this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1), this.maxReconnectDelay);
+    console.log(`[Relay] Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts})`);
+
+    setTimeout(() => {
+      this.isReconnecting = false;
+      this.connectToRelay();
+    }, delay);
+  }
+
   private printQRCode(): void {
     const qrData: QRCodeData = {
-      mode: 'direct',
+      mode: 'relay',
       name: this.config.computerName,
-      host: this.getLocalIP(),
+      host: this.config.host,
       port: this.config.port,
       publicKey: this.crypto.getPublicKeyBase64(),
-      token: this.token
+      token: this.token,
+      relayUrl: this.config.relayUrl
     };
 
     const qrString = JSON.stringify(qrData);
@@ -313,34 +327,20 @@ export class DirectServer {
     try {
       const qrcode = require('qrcode-terminal');
       qrcode.generate(qrString, { small: true }, (qr: string) => {
-        console.log('\n[Direct] Scan this QR code to connect:');
+        console.log('\n[Relay] Scan this QR code to connect:');
         console.log(qr);
       });
     } catch {
-      console.log('\n[Direct] QR Code Data (manual entry):');
+      console.log('\n[Relay] QR Code Data (manual entry):');
       console.log(qrString);
     }
   }
 
-  private getLocalIP(): string {
-    const os = require('os');
-    const interfaces = os.networkInterfaces();
-    for (const name of Object.keys(interfaces)) {
-      for (const iface of interfaces[name] || []) {
-        if (iface.family === 'IPv4' && !iface.internal) {
-          return iface.address;
-        }
-      }
-    }
-    return '127.0.0.1';
-  }
-
   public stop(): void {
     this.cleanupSSEConnections();
-    if (this.appWs) {
-      this.appWs.close();
+    if (this.ws) {
+      this.ws.close();
     }
-    this.wss.close();
-    console.log('[Direct] Server stopped');
+    console.log('[Relay] Client stopped');
   }
 }

@@ -1,5 +1,6 @@
 ﻿import { loadConfig } from './config';
 import { DirectServer } from './ws/direct-server';
+import { RelayClient } from './ws/relay-client';
 
 const config = loadConfig();
 
@@ -10,12 +11,15 @@ console.log(`  OpenCode URL: ${config.opencodeUrl}`);
 console.log(`  Computer Name: ${config.computerName}`);
 console.log(`  Version: ${config.version}`);
 
+let server: DirectServer | RelayClient;
+
 if (config.mode === 'relay') {
   console.log(`  Relay URL: ${config.relayUrl}`);
-  console.log('[Gateway] Relay mode not yet implemented, falling back to direct mode');
+  server = new RelayClient(config);
+  server.start();
+} else {
+  server = new DirectServer(config);
 }
-
-const server = new DirectServer(config);
 
 process.on('SIGINT', () => {
   console.log('\n[Gateway] Shutting down...');

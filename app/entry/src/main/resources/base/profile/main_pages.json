@@ -3,6 +3,8 @@
     "pages/Index",
     "pages/ConnectionListPage",
     "pages/ChatPage",
-    "pages/QRScannerPage"
+    "pages/QRScannerPage",
+    "pages/ReviewPage",
+    "pages/ManualConnectionPage"
   ]
 }

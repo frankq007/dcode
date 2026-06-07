@@ -2,6 +2,7 @@
 import { connectionService } from '../services/ConnectionService';
 import { ConnectionListItem } from '../components/ConnectionListItem';
 import router from '@ohos.router';
+import { promptAction } from '@kit.ArkUI';
 
 @Entry
 @Component
@@ -10,6 +11,10 @@ struct ConnectionListPage {
   @State isLoading: boolean = true;
 
   aboutToAppear() {
+    this.loadConnections();
+  }
+
+  onPageShow() {
     this.loadConnections();
   }
 
@@ -29,12 +34,23 @@ struct ConnectionListPage {
         
         Blank()
         
-        // QR Scanner button
-        Button('扫一扫', { type: ButtonType.Normal })
-          .fontSize(14)
-          .onClick(() => {
-            router.pushUrl({ url: 'pages/QRScannerPage' });
-          })
+        // Action buttons
+        Row() {
+          Button('手动', { type: ButtonType.Normal })
+            .fontSize(13)
+            .height(32)
+            .onClick(() => {
+              router.pushUrl({ url: 'pages/ManualConnectionPage' });
+            })
+          
+          Button('扫一扫', { type: ButtonType.Capsule })
+            .fontSize(13)
+            .height(32)
+            .margin({ left: 8 })
+            .onClick(() => {
+              router.pushUrl({ url: 'pages/QRScannerPage' });
+            })
+        }
       }
       .width('100%')
       .padding(16)
@@ -48,26 +64,46 @@ struct ConnectionListPage {
             .fontColor('#999999')
             .margin({ top: 100 })
           
-          Button('添加连接', { type: ButtonType.Capsule })
-            .margin({ top: 20 })
-            .onClick(() => {
-              router.pushUrl({ url: 'pages/QRScannerPage' });
-            })
+          Text('扫描 Gateway 生成的二维码或手动输入连接信息')
+            .fontSize(13)
+            .fontColor('#bbbbbb')
+            .margin({ top: 8 })
+          
+          Row() {
+            Button('扫一扫', { type: ButtonType.Normal })
+              .height(40)
+              .onClick(() => {
+                router.pushUrl({ url: 'pages/QRScannerPage' });
+              })
+            
+            Button('手动添加', { type: ButtonType.Capsule })
+              .height(40)
+              .margin({ left: 12 })
+              .onClick(() => {
+                router.pushUrl({ url: 'pages/ManualConnectionPage' });
+              })
+          }
+          .margin({ top: 24 })
         }
         .width('100%')
         .layoutWeight(1)
         .justifyContent(FlexAlign.Center)
       } else {
-        List() {
-          ForEach(this.connections, (connection: Connection) => {
-            ListItem() {
-              ConnectionListItem({ connection: connection })
-            }
-          }, (connection: Connection) => connection.id)
+        Refresh({ refreshing: false }) {
+          List() {
+            ForEach(this.connections, (connection: Connection) => {
+              ListItem() {
+                ConnectionListItem({ connection: connection })
+              }
+            }, (connection: Connection) => connection.id)
+          }
+          .width('100%')
+          .layoutWeight(1)
+          .divider({ strokeWidth: 1, color: '#f0f0f0' })
         }
-        .width('100%')
-        .layoutWeight(1)
-        .divider({ strokeWidth: 1, color: '#f0f0f0' })
+        .onRefreshing(() => {
+          this.loadConnections();
+        })
       }
     }
     .width('100%')

@@ -35,6 +35,7 @@ export type MessageType =
   | 'permission_request'
   | 'permission_reply'
   | 'reply'
+  | 'review_url'
   | 'session_list'
   | 'session_switch'
   | 'session_create'

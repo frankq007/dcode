@@ -5,6 +5,7 @@
   | 'permission_request'
   | 'permission_reply'
   | 'reply'
+  | 'review_url'
   | 'session_list'
   | 'session_switch'
   | 'session_create'
@@ -21,8 +22,8 @@ export interface Message {
 
 export interface HandshakeMessage {
   type: 'handshake_init' | 'handshake_ack' | 'handshake_complete';
-  publicKey: string;  // Base64
-  nonce: string;      // Base64
+  publicKey: string;
+  nonce: string;
   version: string;
 }
 
