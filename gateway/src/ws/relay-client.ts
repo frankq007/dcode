@@ -1,4 +1,4 @@
-﻿import WebSocket from 'ws';
+import WebSocket, { RawData } from 'ws';
 import { randomUUID, randomBytes } from 'crypto';
 import { CryptoManager } from '../crypto/crypto-manager';
 import { OpencodeClient, OpencodeEvent } from '../opencode/opencode-client';
@@ -54,7 +54,7 @@ export class RelayClient {
       this.ws?.send(JSON.stringify(registerMsg));
     });
 
-    this.ws.on('message', (data: WebSocket.RawData) => {
+    this.ws.on('message', (data: RawData) => {
       this.handleMessage(data);
     });
 
@@ -68,7 +68,7 @@ export class RelayClient {
     });
   }
 
-  private handleMessage(data: WebSocket.RawData): void {
+  private handleMessage(data: RawData): void {
     const message = data.toString();
     let parsed: any;
     
@@ -311,7 +311,7 @@ export class RelayClient {
     }, delay);
   }
 
-  private printQRCode(): void {
+  private async printQRCode(): Promise<void> {
     const qrData: QRCodeData = {
       mode: 'relay',
       name: this.config.computerName,
@@ -325,7 +325,7 @@ export class RelayClient {
     const qrString = JSON.stringify(qrData);
     
     try {
-      const qrcode = require('qrcode-terminal');
+      const qrcode = await import('qrcode-terminal');
       qrcode.generate(qrString, { small: true }, (qr: string) => {
         console.log('\n[Relay] Scan this QR code to connect:');
         console.log(qr);

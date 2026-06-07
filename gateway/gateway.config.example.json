@@ -1,0 +1,9 @@
+{
+  "mode": "direct",
+  "host": "0.0.0.0",
+  "port": 8765,
+  "relayUrl": "ws://localhost:8766",
+  "opencodeUrl": "http://localhost:3000",
+  "computerName": "MyPC",
+  "version": "0.1.0"
+}

@@ -1,4 +1,4 @@
-﻿import { WebSocketServer, WebSocket, RawData } from 'ws';
+import { WebSocketServer, WebSocket, RawData } from 'ws';
 
 interface RegisteredClient {
   ws: WebSocket;
@@ -13,7 +13,7 @@ interface PairedSession {
   app: RegisteredClient;
 }
 
-class RelayServer {
+export class RelayServer {
   private wss: WebSocketServer;
   private pendingClients: Map<string, RegisteredClient[]> = new Map();
   private activeSessions: Map<string, PairedSession> = new Map();

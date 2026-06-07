@@ -1,5 +1,6 @@
-﻿import { WebSocketServer, WebSocket, RawData } from 'ws';
+import { WebSocketServer, WebSocket, RawData } from 'ws';
 import { randomUUID, randomBytes } from 'crypto';
+import os from 'os';
 import { CryptoManager } from '../crypto/crypto-manager';
 import { OpencodeClient, OpencodeEvent } from '../opencode/opencode-client';
 import { SessionManager } from '../session/session-manager';
@@ -152,16 +153,28 @@ export class DirectServer {
       case 'session_switch':
         this.handleSessionSwitch(message);
         break;
-      case 'heartbeat':
-        this.sendEncryptedMessage({
-          type: 'heartbeat',
-          id: randomUUID(),
-          data: { timestamp: Date.now() },
-          timestamp: Date.now()
-        });
+      case 'token_info':
+        this.handleTokenInfoRequest();
         break;
       default:
-        console.warn(`[Direct] Unknown message type: ${message.type}`);
+        console.log(`[Direct] Unknown message type: ${message.type}`);
+    }
+  }
+
+  private async handleTokenInfoRequest(): Promise<void> {
+    const session = this.sessions.getActive();
+    if (!session) return;
+
+    try {
+      const tokenInfo = await this.opencode.getTokenUsage(session.id);
+      this.sendEncryptedMessage({
+        type: 'token_info',
+        id: randomUUID(),
+        data: tokenInfo,
+        timestamp: Date.now()
+      });
+    } catch (e: any) {
+      this.sendError(`Failed to get token usage: ${e.message}`);
     }
   }
 
@@ -211,6 +224,7 @@ export class DirectServer {
   private handleSessionSwitch(message: Message): void {
     const session = this.sessions.switch(message.data.sessionId);
     if (session) {
+      this.startSSESubscription(session.id);
       this.sendEncryptedMessage({
         type: 'session_switch',
         id: randomUUID(),
@@ -298,7 +312,7 @@ export class DirectServer {
     this.sseControllers.clear();
   }
 
-  private printQRCode(): void {
+  private async printQRCode(): Promise<void> {
     const qrData: QRCodeData = {
       mode: 'direct',
       name: this.config.computerName,
@@ -311,7 +325,7 @@ export class DirectServer {
     const qrString = JSON.stringify(qrData);
     
     try {
-      const qrcode = require('qrcode-terminal');
+      const qrcode = await import('qrcode-terminal');
       qrcode.generate(qrString, { small: true }, (qr: string) => {
         console.log('\n[Direct] Scan this QR code to connect:');
         console.log(qr);
@@ -323,7 +337,6 @@ export class DirectServer {
   }
 
   private getLocalIP(): string {
-    const os = require('os');
     const interfaces = os.networkInterfaces();
     for (const name of Object.keys(interfaces)) {
       for (const iface of interfaces[name] || []) {
