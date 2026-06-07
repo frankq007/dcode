@@ -1,0 +1,47 @@
+version: '3.8'
+
+services:
+  mock-opencode:
+    build:
+      context: ./mock-opencode
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - PORT=3000
+    networks:
+      - dcode-network
+
+  relay:
+    build:
+      context: ./relay
+      dockerfile: Dockerfile
+    ports:
+      - "8766:8766"
+    environment:
+      - RELAY_PORT=8766
+    networks:
+      - dcode-network
+
+  gateway:
+    build:
+      context: ./gateway
+      dockerfile: Dockerfile
+    ports:
+      - "8765:8765"
+    environment:
+      - DCODE_MODE=direct
+      - DCODE_HOST=0.0.0.0
+      - DCODE_PORT=8765
+      - DCODE_OPENCODE_URL=http://mock-opencode:3000
+      - DCODE_COMPUTER_NAME=DockerGateway
+      - DCODE_RELAY_URL=ws://relay:8766
+    depends_on:
+      - mock-opencode
+      - relay
+    networks:
+      - dcode-network
+
+networks:
+  dcode-network:
+    driver: bridge
