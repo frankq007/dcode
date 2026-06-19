@@ -2,7 +2,7 @@ import { WebSocketServer, WebSocket, RawData } from 'ws';
 import { randomUUID, randomBytes } from 'crypto';
 import os from 'os';
 import { CryptoManager } from '../crypto/crypto-manager';
-import { OpencodeClient, OpencodeEvent } from '../opencode/opencode-client';
+import { OpencodeClient, OpencodePart, OpencodeMessageInfo } from '../opencode/opencode-client';
 import { SessionManager } from '../session/session-manager';
 import { GatewayConfig } from '../config';
 import { HandshakeMessage, Message, QRCodeData } from '../types';
@@ -16,7 +16,6 @@ export class DirectServer {
   private handshakeState: 'waiting' | 'step1' | 'complete' = 'waiting';
   private opencode: OpencodeClient;
   private sessions: SessionManager;
-  private sseControllers: Map<string, AbortController> = new Map();
   private seenMessageIds: Set<string> = new Set();
   private maxMessageSize = 1024 * 1024; // 1MB
 
@@ -60,7 +59,6 @@ export class DirectServer {
 
     ws.on('close', () => {
       console.log('[Direct] App disconnected');
-      this.cleanupSSEConnections();
       this.appWs = null;
       this.handshakeState = 'waiting';
       this.seenMessageIds.clear();
@@ -73,13 +71,14 @@ export class DirectServer {
 
   private handleAppMessage(ws: WebSocket, data: RawData): void {
     if (this.handshakeState === 'complete') {
-      const encrypted = JSON.parse(data.toString());
       try {
+        const encrypted = JSON.parse(data.toString());
         const decrypted = this.crypto.decrypt(encrypted);
         const message = JSON.parse(decrypted);
         this.processDecryptedMessage(message);
       } catch (e: any) {
         console.error('[Direct] Decryption/parse error:', e.message);
+        this.sendError('Data parse error', 'BAD_FRAME');
       }
     } else {
       try {
@@ -115,21 +114,70 @@ export class DirectServer {
       const appNonce = (ws as any)._appNonce;
       const gatewayNonce = (ws as any)._gatewayNonce;
       const appPublicKey = (ws as any)._appPublicKey;
-      
+
       this.crypto.deriveSessionKey(appPublicKey, appNonce, gatewayNonce);
       this.handshakeState = 'complete';
-      
+
       console.log('[Direct] Handshake complete: session key derived');
-      
-      const initialSession = this.sessions.create('Default');
-      this.startSSESubscription(initialSession.id);
-      
+
+      this.initializeFirstSession().catch((e: any) => {
+        console.error('[Direct] Session initialization failed:', e.message);
+        this.sendError(`Session initialization failed: ${e.message}`, 'INTERNAL');
+      });
+    }
+  }
+
+  private async initializeFirstSession(): Promise<void> {
+    let activeSessionId: string | null = null;
+
+    try {
+      const existing = await this.opencode.listSessions();
+      if (existing.length > 0) {
+        for (const s of existing) {
+          this.sessions.create(s.id, s.title);
+        }
+        activeSessionId = existing[0].id;
+        this.sessions.switch(activeSessionId);
+      }
+    } catch (e: any) {
+      console.warn('[Direct] Failed to list sessions, will create new:', e.message);
+    }
+
+    if (!activeSessionId) {
+      const created = await this.opencode.createSession();
+      this.sessions.create(created.id, created.title);
+      activeSessionId = created.id;
+    }
+
+    await this.pushSessionList();
+    await this.pushHistory(activeSessionId);
+  }
+
+  private async pushSessionList(): Promise<void> {
+    this.sendEncryptedMessage({
+      type: 'session_list',
+      id: randomUUID(),
+      data: { sessions: this.sessions.list().map(s => ({ id: s.id, name: s.name })) },
+      timestamp: Date.now()
+    });
+  }
+
+  private async pushHistory(sessionId: string): Promise<void> {
+    try {
+      const history = await this.opencode.getMessages(sessionId);
       this.sendEncryptedMessage({
-        type: 'reply',
+        type: 'history',
         id: randomUUID(),
-        data: { message: 'Connected successfully' },
+        data: {
+          sessionId,
+          messages: history,
+          hasMore: false,
+          cursor: undefined
+        },
         timestamp: Date.now()
       });
+    } catch (e: any) {
+      console.warn('[Direct] Failed to load history:', e.message);
     }
   }
 
@@ -153,114 +201,171 @@ export class DirectServer {
       case 'session_switch':
         this.handleSessionSwitch(message);
         break;
-      case 'token_info':
-        this.handleTokenInfoRequest();
+      case 'session_delete':
+        this.handleSessionDelete(message);
+        break;
+      case 'session_list':
+        this.pushSessionList();
+        break;
+      case 'token_query':
+        this.handleTokenQuery();
+        break;
+      case 'heartbeat':
         break;
       default:
         console.log(`[Direct] Unknown message type: ${message.type}`);
     }
   }
 
-  private async handleTokenInfoRequest(): Promise<void> {
+  private async handleTokenQuery(): Promise<void> {
     const session = this.sessions.getActive();
     if (!session) return;
 
     try {
-      const tokenInfo = await this.opencode.getTokenUsage(session.id);
-      this.sendEncryptedMessage({
-        type: 'token_info',
-        id: randomUUID(),
-        data: tokenInfo,
-        timestamp: Date.now()
-      });
+      const msgs = await this.opencode.getMessages(session.id);
+      const lastAssistant = [...msgs].reverse().find(m => m.info.role === 'assistant');
+      const tokens = lastAssistant?.info?.tokens;
+      if (tokens) {
+        this.sendEncryptedMessage({
+          type: 'token_info',
+          id: randomUUID(),
+          data: {
+            total: tokens.total,
+            input: tokens.input,
+            output: tokens.output,
+            contextWindow: 4096
+          },
+          timestamp: Date.now()
+        });
+      }
     } catch (e: any) {
-      this.sendError(`Failed to get token usage: ${e.message}`);
+      this.sendError(`Failed to get token usage: ${e.message}`, 'INTERNAL');
     }
   }
 
   private async handleUserMessage(message: Message): Promise<void> {
     const session = this.sessions.getActive();
     if (!session) {
-      this.sendError('No active session');
+      this.sendError('No active session', 'SESSION_NOT_FOUND');
       return;
     }
-    
+
     this.sessions.touch(session.id);
-    
+
+    this.sendEncryptedMessage({
+      type: 'message_ack',
+      id: randomUUID(),
+      data: { id: message.id, status: 'accepted' },
+      timestamp: Date.now()
+    });
+
     try {
-      await this.opencode.sendMessage(session.id, message.data.content);
+      await this.opencode.sendMessage(session.id, message.data.content, (part, msgInfo) => {
+        this.forwardPartToApp(part, msgInfo);
+      });
     } catch (e: any) {
-      this.sendError(`Failed to send message: ${e.message}`);
+      this.sendError(`Failed to send message: ${e.message}`, 'INTERNAL');
+    }
+  }
+
+  private forwardPartToApp(part: OpencodePart, msgInfo: OpencodeMessageInfo): void {
+    switch (part.type) {
+      case 'reasoning':
+        this.sendEncryptedMessage({
+          type: 'thinking',
+          id: part.id,
+          data: { content: part.text || '' },
+          timestamp: Date.now()
+        });
+        break;
+      case 'text':
+        this.sendEncryptedMessage({
+          type: 'reply',
+          id: part.id,
+          data: { content: part.text || '' },
+          timestamp: Date.now()
+        });
+        break;
+      case 'tool':
+        this.sendEncryptedMessage({
+          type: 'tool_call',
+          id: part.id,
+          data: {
+            toolName: part.toolName || 'unknown',
+            parameters: part.input || {},
+            result: part.output || ''
+          },
+          timestamp: Date.now()
+        });
+        break;
+      case 'step-finish':
+        if (part.tokens) {
+          this.sendEncryptedMessage({
+            type: 'token_info',
+            id: part.id,
+            data: {
+              total: part.tokens.total,
+              input: part.tokens.input,
+              output: part.tokens.output,
+              contextWindow: 4096
+            },
+            timestamp: Date.now()
+          });
+        }
+        break;
+      case 'patch':
+        this.sendEncryptedMessage({
+          type: 'review_url',
+          id: part.id,
+          data: { url: `session/${msgInfo.sessionID}` },
+          timestamp: Date.now()
+        });
+        break;
+      default:
+        break;
     }
   }
 
   private async handlePermissionReply(message: Message): Promise<void> {
-    const session = this.sessions.getActive();
-    if (!session) return;
-    
     try {
-      await this.opencode.handlePermissionReply(session.id, message.data.requestId, message.data.allowed);
+      await this.opencode.respondPermission(message.data.requestId, message.data.allowed);
     } catch (e: any) {
-      this.sendError(`Failed to send permission reply: ${e.message}`);
+      this.sendError(`Failed to send permission reply: ${e.message}`, 'INTERNAL');
+    }
+  }
+
+  private async handleSessionDelete(message: Message): Promise<void> {
+    try {
+      await this.opencode.deleteSession(message.data.sessionId);
+      this.sessions.delete(message.data.sessionId);
+      await this.pushSessionList();
+    } catch (e: any) {
+      this.sendError(`Failed to delete session: ${e.message}`, 'INTERNAL');
     }
   }
 
   private async handleSessionCreate(message: Message): Promise<void> {
     try {
-      const session = this.sessions.create(message.data.name);
-      this.startSSESubscription(session.id);
-      
-      this.sendEncryptedMessage({
-        type: 'session_list',
-        id: randomUUID(),
-        data: { sessions: this.sessions.list() },
-        timestamp: Date.now()
-      });
+      const created = await this.opencode.createSession();
+      this.sessions.create(created.id, created.title);
+
+      await this.pushSessionList();
     } catch (e: any) {
-      this.sendError(`Failed to create session: ${e.message}`);
+      this.sendError(`Failed to create session: ${e.message}`, 'INTERNAL');
     }
   }
 
-  private handleSessionSwitch(message: Message): void {
+  private async handleSessionSwitch(message: Message): Promise<void> {
     const session = this.sessions.switch(message.data.sessionId);
     if (session) {
-      this.startSSESubscription(session.id);
       this.sendEncryptedMessage({
         type: 'session_switch',
         id: randomUUID(),
         data: { sessionId: session.id, name: session.name },
         timestamp: Date.now()
       });
+      await this.pushHistory(session.id);
     }
-  }
-
-  private startSSESubscription(sessionId: string): void {
-    this.cleanupSSEConnections();
-    
-    const controller = this.opencode.subscribeToEvents(sessionId, (event: OpencodeEvent) => {
-      const message: Message = {
-        type: this.mapSSEEventType(event.type),
-        id: randomUUID(),
-        data: event.data,
-        timestamp: Date.now()
-      };
-      this.sendEncryptedMessage(message);
-    });
-    
-    this.sseControllers.set(sessionId, controller);
-  }
-
-  private mapSSEEventType(type: string): Message['type'] {
-    const mapping: Record<string, Message['type']> = {
-      'thinking': 'thinking',
-      'tool_call': 'tool_call',
-      'permission_request': 'permission_request',
-      'reply': 'reply',
-      'token_usage': 'token_info',
-      'error': 'error',
-      'review_url': 'review_url'
-    };
-    return mapping[type] || 'reply';
   }
 
   private sendEncryptedMessage(message: Message): void {
@@ -296,21 +401,15 @@ export class DirectServer {
     return chunks;
   }
 
-  private sendError(message: string): void {
+  private sendError(message: string, code: string = 'INTERNAL'): void {
     this.sendEncryptedMessage({
       type: 'error',
       id: randomUUID(),
-      data: { message },
+      data: { code, message },
       timestamp: Date.now()
     });
   }
 
-  private cleanupSSEConnections(): void {
-    for (const [id, controller] of this.sseControllers) {
-      controller.abort();
-    }
-    this.sseControllers.clear();
-  }
 
   private async printQRCode(): Promise<void> {
     const qrData: QRCodeData = {
@@ -349,7 +448,6 @@ export class DirectServer {
   }
 
   public stop(): void {
-    this.cleanupSSEConnections();
     if (this.appWs) {
       this.appWs.close();
     }

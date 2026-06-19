@@ -8,82 +8,102 @@ describe('SessionManager', () => {
     manager = new SessionManager();
   });
 
-  it('should create a new session', () => {
-    const session = manager.create('Test Session');
-    
+  it('should create a new session with given opencodeId', () => {
+    const session = manager.create('oc-id-1', 'Test Session');
+
     expect(session).toBeDefined();
-    expect(session.id).toBeDefined();
+    expect(session.id).toBe('oc-id-1');
     expect(session.name).toBe('Test Session');
     expect(session.createdAt).toBeDefined();
     expect(session.lastActivity).toBeDefined();
+    expect(session.lastActiveSeq).toBe(0);
   });
 
   it('should create session with default name if not provided', () => {
-    const session = manager.create();
-    
+    const session = manager.create('oc-id-1');
+
     expect(session.name).toBe('Session 1');
   });
 
   it('should list all sessions', () => {
-    manager.create('Session 1');
-    manager.create('Session 2');
-    manager.create('Session 3');
-    
+    manager.create('oc-id-1', 'Session 1');
+    manager.create('oc-id-2', 'Session 2');
+    manager.create('oc-id-3', 'Session 3');
+
     const sessions = manager.list();
     expect(sessions.length).toBe(3);
   });
 
   it('should get active session', () => {
-    const session1 = manager.create('Session 1');
-    const session2 = manager.create('Session 2');
-    
+    manager.create('oc-id-1', 'Session 1');
+    manager.create('oc-id-2', 'Session 2');
+
     const active = manager.getActive();
-    expect(active?.id).toBe(session2.id);
+    expect(active?.id).toBe('oc-id-2');
   });
 
   it('should switch between sessions', () => {
-    const session1 = manager.create('Session 1');
-    const session2 = manager.create('Session 2');
-    
-    const switched = manager.switch(session1.id);
-    expect(switched?.id).toBe(session1.id);
-    
+    manager.create('oc-id-1', 'Session 1');
+    manager.create('oc-id-2', 'Session 2');
+
+    const switched = manager.switch('oc-id-1');
+    expect(switched?.id).toBe('oc-id-1');
+
     const active = manager.getActive();
-    expect(active?.id).toBe(session1.id);
+    expect(active?.id).toBe('oc-id-1');
   });
 
   it('should delete a session', () => {
-    const session1 = manager.create('Session 1');
-    const session2 = manager.create('Session 2');
-    
-    const deleted = manager.delete(session1.id);
+    manager.create('oc-id-1', 'Session 1');
+    manager.create('oc-id-2', 'Session 2');
+
+    const deleted = manager.delete('oc-id-1');
     expect(deleted).toBe(true);
-    
+
     const sessions = manager.list();
     expect(sessions.length).toBe(1);
-    expect(sessions[0].id).toBe(session2.id);
+    expect(sessions[0].id).toBe('oc-id-2');
   });
 
   it('should update active session when current active is deleted', () => {
-    const session1 = manager.create('Session 1');
-    const session2 = manager.create('Session 2');
-    
-    manager.delete(session2.id);
-    
+    manager.create('oc-id-1', 'Session 1');
+    manager.create('oc-id-2', 'Session 2');
+
+    manager.delete('oc-id-2');
+
     const active = manager.getActive();
-    expect(active?.id).toBe(session1.id);
+    expect(active?.id).toBe('oc-id-1');
   });
 
   it('should touch session to update last activity', () => {
-    const session = manager.create('Test Session');
+    const session = manager.create('oc-id-1', 'Test Session');
     const originalActivity = session.lastActivity;
-    
-    // Wait a bit to ensure timestamp changes
+
     setTimeout(() => {
-      manager.touch(session.id);
-      const updated = manager.get(session.id);
+      manager.touch('oc-id-1');
+      const updated = manager.get('oc-id-1');
       expect(updated?.lastActivity).toBeGreaterThan(originalActivity);
     }, 10);
+  });
+
+  it('should update lastActiveSeq', () => {
+    manager.create('oc-id-1', 'Test Session');
+
+    manager.updateSeq('oc-id-1', 5);
+    expect(manager.get('oc-id-1')?.lastActiveSeq).toBe(5);
+
+    manager.updateSeq('oc-id-1', 3);
+    expect(manager.get('oc-id-1')?.lastActiveSeq).toBe(5);
+  });
+
+  it('should clear all sessions', () => {
+    manager.create('oc-id-1', 'Session 1');
+    manager.create('oc-id-2', 'Session 2');
+
+    manager.clear();
+
+    expect(manager.list().length).toBe(0);
+    expect(manager.getActive()).toBeNull();
   });
 
   it('should return null when switching to non-existent session', () => {

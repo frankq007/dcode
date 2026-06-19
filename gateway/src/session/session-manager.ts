@@ -1,22 +1,22 @@
-﻿import { randomUUID } from 'crypto';
-
-export interface Session {
+﻿export interface Session {
   id: string;
   name: string;
   createdAt: number;
   lastActivity: number;
+  lastActiveSeq: number;
 }
 
 export class SessionManager {
   private sessions: Map<string, Session> = new Map();
   private activeSessionId: string | null = null;
 
-  create(name?: string): Session {
+  create(opencodeId: string, name?: string): Session {
     const session: Session = {
-      id: randomUUID(),
+      id: opencodeId,
       name: name || `Session ${this.sessions.size + 1}`,
       createdAt: Date.now(),
-      lastActivity: Date.now()
+      lastActivity: Date.now(),
+      lastActiveSeq: 0
     };
     this.sessions.set(session.id, session);
     this.activeSessionId = session.id;
@@ -62,5 +62,18 @@ export class SessionManager {
     if (session) {
       session.lastActivity = Date.now();
     }
+  }
+
+  updateSeq(id: string, seq: number): void {
+    const session = this.sessions.get(id);
+    if (session && seq > session.lastActiveSeq) {
+      session.lastActiveSeq = seq;
+    }
+  }
+
+  clear(): void {
+    this.sessions.clear();
+    this.activeSessionId = null;
+    console.log('[Session] All sessions cleared');
   }
 }

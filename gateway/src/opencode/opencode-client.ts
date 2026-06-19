@@ -1,144 +1,225 @@
-﻿import { Message } from '../types';
-
-export interface OpencodeEvent {
-  type: string;
-  data: any;
+﻿export interface OpencodeSessionInfo {
+  id: string;
+  slug: string;
+  title: string;
+  directory: string;
+  path: string;
+  version: string;
+  time: { created: number; updated: number };
+  tokens?: { input: number; output: number; reasoning: number; cache: { read: number; write: number } };
 }
+
+export interface OpencodeMessageInfo {
+  id: string;
+  sessionID: string;
+  role: 'user' | 'assistant';
+  time?: { created?: number; updated?: number; start?: number; end?: number; completed?: number };
+  model?: { providerID: string; modelID: string };
+  agent?: string;
+  summary?: { diffs: any[] };
+  finish?: string;
+  cost?: number;
+  tokens?: { total: number; input: number; output: number; reasoning: number; cache: { read: number; write: number } };
+}
+
+export interface OpencodePart {
+  id: string;
+  sessionID: string;
+  messageID: string;
+  type: 'text' | 'reasoning' | 'step-start' | 'step-finish' | 'patch' | 'tool' | string;
+  text?: string;
+  time?: { start: number; end: number };
+  snapshot?: string;
+  reason?: string;
+  tokens?: { total: number; input: number; output: number; reasoning: number; cache: { read: number; write: number } };
+  cost?: number;
+  hash?: string;
+  files?: string[];
+  toolName?: string;
+  input?: any;
+  output?: any;
+  [key: string]: any;
+}
+
+export interface OpencodeMessage {
+  info: OpencodeMessageInfo;
+  parts: OpencodePart[];
+}
+
+export type PartHandler = (part: OpencodePart, messageInfo: OpencodeMessageInfo) => void;
 
 export class OpencodeClient {
   private baseUrl: string;
-  private eventListeners: Map<string, ((event: OpencodeEvent) => void)[]> = new Map();
 
   constructor(baseUrl: string) {
     this.baseUrl = baseUrl.replace(/\/$/, '');
   }
 
-  async sendMessage(sessionId: string, message: string): Promise<void> {
-    const response = await fetch(`${this.baseUrl}/sessions/${sessionId}/messages`, {
+  async createSession(): Promise<OpencodeSessionInfo> {
+    const response = await fetch(`${this.baseUrl}/session`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content: message })
+      body: '{}'
     });
-    
+
     if (!response.ok) {
-      throw new Error(`Failed to send message: ${response.statusText}`);
+      throw new Error(`Failed to create session: ${response.status} ${response.statusText}`);
     }
+
+    const data = await response.json() as any;
+    return data.info ? data.info : data;
   }
 
-  subscribeToEvents(sessionId: string, onEvent: (event: OpencodeEvent) => void): AbortController {
-    const controller = new AbortController();
-    
-    this.connectSSE(sessionId, onEvent, controller.signal);
-    
-    return controller;
-  }
+  async listSessions(): Promise<OpencodeSessionInfo[]> {
+    const response = await fetch(`${this.baseUrl}/session`);
 
-  private async connectSSE(sessionId: string, onEvent: (event: OpencodeEvent) => void, signal: AbortSignal): Promise<void> {
-    try {
-      const response = await fetch(`${this.baseUrl}/sessions/${sessionId}/events`, {
-        signal,
-        headers: { 'Accept': 'text/event-stream' }
-      });
-
-      if (!response.ok) {
-        throw new Error(`SSE connection failed: ${response.statusText}`);
-      }
-
-      const reader = response.body?.getReader();
-      if (!reader) throw new Error('No response body');
-
-      const decoder = new TextDecoder();
-      let buffer = '';
-
-      while (!signal.aborted) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            try {
-              const event = JSON.parse(line.slice(6));
-              onEvent(event);
-            } catch (e) {
-              console.error('[Opencode] Failed to parse SSE event:', e);
-            }
-          }
-        }
-      }
-    } catch (e: any) {
-      if (e.name !== 'AbortError') {
-        console.error('[Opencode] SSE error:', e.message);
-      }
-    }
-  }
-
-  async createSession(): Promise<{ id: string }> {
-    const response = await fetch(`${this.baseUrl}/sessions`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' }
-    });
-    
     if (!response.ok) {
-      throw new Error(`Failed to create session: ${response.statusText}`);
+      throw new Error(`Failed to list sessions: ${response.status} ${response.statusText}`);
     }
-    
-    return response.json() as Promise<{ id: string }>;
-  }
 
-  async listSessions(): Promise<Array<{ id: string; name: string }>> {
-    const response = await fetch(`${this.baseUrl}/sessions`);
-    
-    if (!response.ok) {
-      throw new Error(`Failed to list sessions: ${response.statusText}`);
-    }
-    
-    return response.json() as Promise<Array<{ id: string; name: string }>>;
+    const data = await response.json() as any;
+    const sessions = Array.isArray(data) ? data : (data.sessions || []);
+    return sessions.map((s: any) => s.info ? s.info : s);
   }
 
   async deleteSession(id: string): Promise<void> {
-    const response = await fetch(`${this.baseUrl}/sessions/${id}`, {
+    const response = await fetch(`${this.baseUrl}/session/${id}`, {
       method: 'DELETE'
     });
-    
+
     if (!response.ok) {
-      throw new Error(`Failed to delete session: ${response.statusText}`);
+      throw new Error(`Failed to delete session: ${response.status} ${response.statusText}`);
     }
   }
 
-  async getReviewUrl(): Promise<string> {
-    const response = await fetch(`${this.baseUrl}/review/url`);
-    
+  async getMessages(sessionId: string): Promise<OpencodeMessage[]> {
+    const response = await fetch(`${this.baseUrl}/session/${sessionId}/message`);
+
     if (!response.ok) {
-      throw new Error(`Failed to get review URL: ${response.statusText}`);
+      throw new Error(`Failed to get messages: ${response.status} ${response.statusText}`);
     }
-    
-    const data = await response.json() as { url: string };
-    return data.url;
+
+    const data = await response.json() as any;
+    return Array.isArray(data) ? data : [];
   }
 
-  async getTokenUsage(sessionId: string): Promise<{ input: number; output: number; total: number; contextWindow: number }> {
-    const response = await fetch(`${this.baseUrl}/sessions/${sessionId}/tokens`);
-    
-    if (!response.ok) {
-      throw new Error(`Failed to get token usage: ${response.statusText}`);
-    }
-    
-    return response.json() as Promise<{ input: number; output: number; total: number; contextWindow: number }>;
-  }
+  async sendMessage(sessionId: string, text: string, onPart?: PartHandler): Promise<OpencodeMessage> {
+    const url = onPart
+      ? `${this.baseUrl}/session/${sessionId}/message?subscribe=true`
+      : `${this.baseUrl}/session/${sessionId}/message`;
 
-  async handlePermissionReply(sessionId: string, requestId: string, allowed: boolean): Promise<void> {
-    const response = await fetch(`${this.baseUrl}/sessions/${sessionId}/permissions/${requestId}`, {
+    const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ allowed })
+      body: JSON.stringify({ parts: [{ type: 'text', text }] })
     });
-    
+
     if (!response.ok) {
-      throw new Error(`Failed to send permission reply: ${response.statusText}`);
+      throw new Error(`Failed to send message: ${response.status} ${response.statusText}`);
+    }
+
+    if (onPart) {
+      return this.readStreamingResponse(response, onPart);
+    }
+
+    const data = await response.json() as any;
+    return { info: data.info, parts: data.parts || [] };
+  }
+
+  private async readStreamingResponse(response: Response, onPart: PartHandler): Promise<OpencodeMessage> {
+    const reader = response.body?.getReader();
+    if (!reader) {
+      const data = await response.json() as any;
+      return { info: data.info, parts: data.parts || [] };
+    }
+
+    const decoder = new TextDecoder();
+    let fullText = '';
+    let lastParsedParts: any[] = [];
+    let messageInfo: any = {};
+    const seenIds = new Set<string>();
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      fullText += decoder.decode(value, { stream: true });
+
+      try {
+        const parsed = JSON.parse(fullText);
+        messageInfo = parsed.info || messageInfo;
+        const currentParts = parsed.parts || [];
+        for (const part of currentParts) {
+          if (part.id && !seenIds.has(part.id)) {
+            seenIds.add(part.id);
+            onPart(part, messageInfo);
+          }
+        }
+        lastParsedParts = currentParts;
+      } catch {
+        // Not yet complete JSON, continue accumulating
+      }
+    }
+
+    try {
+      const final = JSON.parse(fullText);
+      messageInfo = final.info || messageInfo;
+      const finalParts = final.parts || lastParsedParts;
+      for (const part of finalParts) {
+        if (part.id && !seenIds.has(part.id)) {
+          seenIds.add(part.id);
+          onPart(part, messageInfo);
+        }
+      }
+      return { info: messageInfo, parts: finalParts };
+    } catch {
+      return { info: messageInfo, parts: lastParsedParts };
+    }
+  }
+
+  async respondPermission(permissionId: string, allow: boolean): Promise<void> {
+    const response = await fetch(`${this.baseUrl}/permission/${permissionId}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ allow })
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to respond to permission: ${response.status} ${response.statusText}`);
+    }
+  }
+
+  async getPermissions(): Promise<any[]> {
+    const response = await fetch(`${this.baseUrl}/permission`);
+    if (!response.ok) return [];
+    const data = await response.json();
+    return Array.isArray(data) ? data : [];
+  }
+
+  async getConfig(): Promise<any> {
+    const response = await fetch(`${this.baseUrl}/config`);
+    if (!response.ok) {
+      throw new Error(`Failed to get config: ${response.status} ${response.statusText}`);
+    }
+    return response.json();
+  }
+
+  async getVersion(): Promise<string> {
+    try {
+      const session = await this.createSession();
+      await this.deleteSession(session.id);
+      return session.version || 'unknown';
+    } catch {
+      try {
+        const response = await fetch(`${this.baseUrl}/config`);
+        if (response.ok) {
+          const data = await response.json() as any;
+          return data.version || 'unknown';
+        }
+      } catch {
+        // ignore
+      }
+      return 'unknown';
     }
   }
 }
