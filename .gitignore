@@ -11,7 +11,7 @@ coverage/
 app/.hvigor/
 app/entry/build/
 app/oh_modules/
-app/oh-package-lock.json5
+**/oh-package-lock.json5
 app/build/
 
 # Test and fix scripts
@@ -25,4 +25,21 @@ gw*.txt
 layout*.xml
 oc-*.txt
 screen.jpeg
+
+# Debug dumps & scratch artifacts (root-level)
+/*.xml
+/app-log.txt
+/shot.jpeg
+/screenshot/
+/ui-check/
+/app/screenshot/
+/hello*.js
+/hello.js
+
+# Local runtime config & debug scripts (keep example only)
+/gateway/gateway.config.json
+/gateway/gateway.err
+/gateway/src/diag-message.ts
+/gateway/src/e2e-hello-world.ts
+/gateway/src/test-opencode.ts
 

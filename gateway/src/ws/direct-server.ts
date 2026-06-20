@@ -4,6 +4,7 @@ import os from 'os';
 import { CryptoManager } from '../crypto/crypto-manager';
 import { OpencodeClient, OpencodePart, OpencodeMessageInfo } from '../opencode/opencode-client';
 import { SessionManager } from '../session/session-manager';
+import { OfflineEventBuffer } from '../session/offline-buffer';
 import { GatewayConfig } from '../config';
 import { HandshakeMessage, Message, QRCodeData } from '../types';
 
@@ -16,13 +17,19 @@ export class DirectServer {
   private handshakeState: 'waiting' | 'step1' | 'complete' = 'waiting';
   private opencode: OpencodeClient;
   private sessions: SessionManager;
+  private offlineBuffer: OfflineEventBuffer = new OfflineEventBuffer();
   private seenMessageIds: Set<string> = new Set();
   private maxMessageSize = 1024 * 1024; // 1MB
+  private pendingSyncSeq: number = -1;
+  private sessionInitDone: boolean = false;
+  private pingTimer: NodeJS.Timeout | null = null;
+  private messageQueue: Message[] = [];
+  private isProcessingMessage: boolean = false;
 
   constructor(config: GatewayConfig) {
     this.config = config;
     this.crypto = new CryptoManager();
-    this.token = randomUUID();
+    this.token = config.token || randomUUID();
     this.opencode = new OpencodeClient(config.opencodeUrl);
     this.sessions = new SessionManager();
     
@@ -38,10 +45,16 @@ export class DirectServer {
 
     this.wss.on('connection', (ws: WebSocket) => {
       if (this.appWs && this.appWs.readyState === WebSocket.OPEN) {
-        console.log('[Direct] Rejecting new connection: existing app connected');
-        ws.send(JSON.stringify({ type: 'error', data: { message: 'Another app is already connected' } }));
-        ws.close();
-        return;
+        console.log('[Direct] Replacing existing connection (CONFLICT)');
+        try {
+          this.appWs.send(JSON.stringify({ type: 'error', data: { code: 'CONFLICT', message: 'Connection replaced by new device' } }));
+        } catch {
+          // ignore send errors on closing socket
+        }
+        this.appWs.close();
+        this.appWs = null;
+        this.handshakeState = 'waiting';
+        this.seenMessageIds.clear();
       }
 
       console.log('[Direct] New app connection');
@@ -57,16 +70,29 @@ export class DirectServer {
       this.handleAppMessage(ws, data);
     });
 
+    ws.on('pong', () => {
+    });
+
     ws.on('close', () => {
       console.log('[Direct] App disconnected');
       this.appWs = null;
       this.handshakeState = 'waiting';
       this.seenMessageIds.clear();
+      if (this.pingTimer) {
+        clearInterval(this.pingTimer);
+        this.pingTimer = null;
+      }
     });
 
     ws.on('error', (error) => {
       console.error('[Direct] WebSocket error:', error.message);
     });
+
+    this.pingTimer = setInterval(() => {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.ping();
+      }
+    }, 10000);
   }
 
   private handleAppMessage(ws: WebSocket, data: RawData): void {
@@ -136,29 +162,63 @@ export class DirectServer {
       this.handshakeState = 'complete';
       console.log('[Direct] Handshake complete: session key verified');
 
-      // Send connection ack immediately to prevent WebSocket idle timeout
-      this.sendEncryptedMessage({
-        type: 'reply',
-        id: randomUUID(),
-        data: { content: '连接成功，正在加载会话...' },
-        timestamp: Date.now()
-      });
+      if (this.sessionInitDone) {
+        console.log('[Direct] Reconnect detected, skipping session init');
+        if (this.pendingSyncSeq >= 0) {
+          console.log(`[Direct] Processing pending sync (lastSeq=${this.pendingSyncSeq})`);
+          this.processSync(this.pendingSyncSeq).catch((e: any) => {
+            console.error('[Direct] Sync processing failed:', e.message);
+          });
+          this.pendingSyncSeq = -1;
+        }
+      } else {
+        this.sendEncryptedMessage({
+          type: 'reply',
+          id: randomUUID(),
+          data: { content: '连接成功，正在加载会话...' },
+          timestamp: Date.now()
+        });
 
-      this.initializeFirstSession().catch((e: any) => {
-        console.error('[Direct] Session initialization failed:', e.message);
-        this.sendError(`Session initialization failed: ${e.message}`, 'INTERNAL');
-      });
+        this.initializeFirstSession().then(() => {
+          this.sessionInitDone = true;
+          if (this.pendingSyncSeq >= 0) {
+            console.log(`[Direct] Processing pending sync (lastSeq=${this.pendingSyncSeq})`);
+            this.processSync(this.pendingSyncSeq);
+            this.pendingSyncSeq = -1;
+          }
+        }).catch((e: any) => {
+          console.error('[Direct] Session initialization failed:', e.message);
+          this.sendError(`Session initialization failed: ${e.message}`, 'INTERNAL');
+        });
+      }
     }
   }
 
   private async initializeFirstSession(): Promise<void> {
-    // Create a fresh session to avoid old context slowing down AI response
-    const created = await this.opencode.createSession();
-    this.sessions.create(created.id, created.title);
-    console.log(`[Direct] Created new session: ${created.title} (${created.id})`);
+    let existing = await this.opencode.listSessions();
+    existing = existing.filter(s => !s.time.archived);
+
+    for (const s of existing) {
+      if (!this.sessions.get(s.id)) {
+        this.sessions.create(s.id, s.title || `Session ${this.sessions.list().length + 1}`);
+      }
+    }
+
+    if (this.sessions.list().length === 0) {
+      const created = await this.opencode.createSession();
+      this.sessions.create(created.id, created.title);
+      console.log(`[Direct] Created new session: ${created.title} (${created.id})`);
+    } else {
+      const latest = existing[0];
+      this.sessions.switch(latest.id);
+      console.log(`[Direct] Using latest session: ${latest.title} (${latest.id})`);
+    }
 
     await this.pushSessionList();
-    await this.pushHistory(created.id);
+    const active = this.sessions.getActive();
+    if (active) {
+      await this.pushHistory(active.id);
+    }
   }
 
   private async pushSessionList(): Promise<void> {
@@ -219,7 +279,16 @@ export class DirectServer {
       case 'token_query':
         this.handleTokenQuery();
         break;
+      case 'sync':
+        this.handleSync(message);
+        break;
       case 'heartbeat':
+        this.sendEncryptedMessage({
+          type: 'heartbeat',
+          id: randomUUID(),
+          data: { timestamp: Date.now() },
+          timestamp: Date.now()
+        });
         break;
       default:
         console.log(`[Direct] Unknown message type: ${message.type}`);
@@ -252,6 +321,38 @@ export class DirectServer {
     }
   }
 
+  private handleSync(message: Message): void {
+    const lastSeq = (message.data as any).lastSeq || 0;
+    console.log(`[Direct] Sync request: lastSeq=${lastSeq}`);
+
+    if (!this.sessionInitDone) {
+      console.log('[Direct] Session not ready, queuing sync');
+      this.pendingSyncSeq = lastSeq;
+      return;
+    }
+
+    this.processSync(lastSeq);
+  }
+
+  private async processSync(lastSeq: number): Promise<void> {
+    const session = this.sessions.getActive();
+    if (!session) {
+      console.warn('[Direct] Sync: no active session after init');
+      return;
+    }
+
+    if (lastSeq === 0) {
+      await this.pushHistory(session.id);
+    }
+
+    const events = this.offlineBuffer.since(session.id, lastSeq);
+    console.log(`[Direct] Replaying ${events.length} offline events for session ${session.id}`);
+
+    for (const event of events) {
+      this.sendEncryptedMessage(event);
+    }
+  }
+
   private async handleUserMessage(message: Message): Promise<void> {
     const session = this.sessions.getActive();
     if (!session) {
@@ -259,6 +360,7 @@ export class DirectServer {
       return;
     }
 
+    console.log(`[Direct] user_message received: "${message.data.content?.substring(0, 50)}" session=${session.id}`);
     this.sessions.touch(session.id);
 
     this.sendEncryptedMessage({
@@ -268,12 +370,36 @@ export class DirectServer {
       timestamp: Date.now()
     });
 
+    this.messageQueue.push(message);
+    this.processMessageQueue();
+  }
+
+  private async processMessageQueue(): Promise<void> {
+    if (this.isProcessingMessage) return;
+    if (this.messageQueue.length === 0) return;
+
+    const session = this.sessions.getActive();
+    if (!session) {
+      this.isProcessingMessage = false;
+      return;
+    }
+
+    this.isProcessingMessage = true;
+    const message = this.messageQueue.shift()!;
+
     try {
+      console.log(`[Direct] Processing queued message: "${message.data.content?.substring(0, 30)}"`);
       await this.opencode.sendMessage(session.id, message.data.content, (part, msgInfo) => {
+        console.log(`[Direct] forwardPartToApp: type=${part.type} id=${part.id}`);
         this.forwardPartToApp(part, msgInfo);
       });
+      console.log('[Direct] opencode.sendMessage completed');
     } catch (e: any) {
+      console.error('[Direct] Failed to send message:', e.message);
       this.sendError(`Failed to send message: ${e.message}`, 'INTERNAL');
+    } finally {
+      this.isProcessingMessage = false;
+      this.processMessageQueue();
     }
   }
 
@@ -350,6 +476,7 @@ export class DirectServer {
     try {
       await this.opencode.deleteSession(message.data.sessionId);
       this.sessions.delete(message.data.sessionId);
+      this.offlineBuffer.clearSession(message.data.sessionId);
       await this.pushSessionList();
     } catch (e: any) {
       this.sendError(`Failed to delete session: ${e.message}`, 'INTERNAL');
@@ -362,6 +489,14 @@ export class DirectServer {
       this.sessions.create(created.id, created.title);
 
       await this.pushSessionList();
+
+      this.sendEncryptedMessage({
+        type: 'session_switch',
+        id: randomUUID(),
+        data: { sessionId: created.id, name: created.title },
+        timestamp: Date.now()
+      });
+      await this.pushHistory(created.id);
     } catch (e: any) {
       this.sendError(`Failed to create session: ${e.message}`, 'INTERNAL');
     }
@@ -381,8 +516,21 @@ export class DirectServer {
   }
 
   private sendEncryptedMessage(message: Message): void {
-    if (!this.appWs || this.appWs.readyState !== WebSocket.OPEN) return;
-    
+    if (this.offlineBuffer.isEventType(message.type)) {
+      const session = this.sessions.getActive();
+      if (session) {
+        const seq = this.offlineBuffer.nextSeq(session.id);
+        message.seq = seq;
+        this.offlineBuffer.store(session.id, message);
+        this.sessions.updateSeq(session.id, seq);
+      }
+    }
+
+    if (!this.appWs || this.appWs.readyState !== WebSocket.OPEN) {
+      console.log(`[Direct] Socket closed, event buffered (type=${message.type}, seq=${message.seq ?? '-'})`);
+      return;
+    }
+
     const plaintext = JSON.stringify(message);
     const chunks = this.chunkMessage(plaintext);
     
@@ -390,6 +538,7 @@ export class DirectServer {
       const encrypted = this.crypto.encrypt(chunk);
       this.appWs.send(JSON.stringify(encrypted));
     }
+    console.log(`[Direct] Sent to app: type=${message.type} stream=${message.stream ?? '-'} seq=${message.seq ?? '-'}`);
   }
 
   private chunkMessage(plaintext: string): string[] {

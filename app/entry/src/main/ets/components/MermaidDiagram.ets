@@ -48,7 +48,7 @@ export struct MermaidDiagram {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <script src="resource://rawfile/mermaid.min.js"></script>
   <style>
     body {
       margin: 0;

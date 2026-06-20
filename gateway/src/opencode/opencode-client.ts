@@ -5,7 +5,8 @@
   directory: string;
   path: string;
   version: string;
-  time: { created: number; updated: number };
+  parentID?: string;
+  time: { created: number; updated: number; archived?: number };
   tokens?: { input: number; output: number; reasoning: number; cache: { read: number; write: number } };
 }
 
@@ -78,8 +79,8 @@ export class OpencodeClient {
     }
 
     const data = await response.json() as any;
-    const sessions = Array.isArray(data) ? data : (data.sessions || []);
-    return sessions.map((s: any) => s.info ? s.info : s);
+    const sessions = Array.isArray(data) ? data : (data.value || data.sessions || []);
+    return sessions.map((s: any) => s.info ? s.info : s).filter((s: OpencodeSessionInfo) => !s.parentID);
   }
 
   async deleteSession(id: string): Promise<void> {
@@ -124,6 +125,65 @@ export class OpencodeClient {
     }
 
     return message;
+  }
+
+  async sendMessageStream(sessionId: string, text: string, onPart?: PartHandler): Promise<OpencodeMessage> {
+    const response = await fetch(`${this.baseUrl}/session/${sessionId}/message?subscribe=true`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'text/event-stream' },
+      body: JSON.stringify({ parts: [{ type: 'text', text }] })
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to send message: ${response.status} ${response.statusText}`);
+    }
+
+    const contentType = response.headers.get('content-type') || '';
+
+    if (contentType.includes('text/event-stream') && response.body) {
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let fullMessage: OpencodeMessage = { info: {} as any, parts: [] };
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            const jsonStr = line.slice(6).trim();
+            if (!jsonStr) continue;
+            try {
+              const event = JSON.parse(jsonStr) as any;
+              if (event.type === 'message' || event.info) {
+                fullMessage = { info: event.info || event.data?.info || {} as any, parts: event.parts || event.data?.parts || [] };
+              } else if (event.type === 'part' && event.part && onPart) {
+                onPart(event.part, fullMessage.info);
+              } else if (event.part && onPart) {
+                onPart(event.part, fullMessage.info);
+              }
+            } catch {
+              // ignore parse errors for partial events
+            }
+          }
+        }
+      }
+      return fullMessage;
+    } else {
+      const data = await response.json() as any;
+      const message: OpencodeMessage = { info: data.info, parts: data.parts || [] };
+      if (onPart) {
+        for (const part of message.parts) {
+          onPart(part, message.info);
+        }
+      }
+      return message;
+    }
   }
 
   async respondPermission(permissionId: string, allow: boolean): Promise<void> {

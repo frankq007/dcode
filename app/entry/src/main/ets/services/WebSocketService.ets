@@ -1,4 +1,4 @@
-import { Message, QRCodeData, EncryptedMessage } from '../models/index';
+import { Message, MessageData, QRCodeData, EncryptedMessage } from '../models/index';
 import { webSocket } from '@kit.NetworkKit';
 import { util } from '@kit.ArkTS';
 import { CryptoService } from './CryptoService';
@@ -65,13 +65,30 @@ export class WebSocketService {
   private reconnectTimer: number | null = null;
   private lastQrData: QRCodeData | null = null;
 
+  private lastSeq: number = 0;
+  private isForeground: boolean = true;
+  private heartbeatTimer: number | null = null;
+  private heartbeatTimeoutTimer: number | null = null;
+  private readonly HEARTBEAT_INTERVAL_FOREGROUND: number = 10000;
+  private readonly HEARTBEAT_INTERVAL_BACKGROUND: number = 120000;
+  private readonly HEARTBEAT_TIMEOUT: number = 20000;
+
   async connect(qrData: QRCodeData): Promise<void> {
     if (qrData.expiresAt && qrData.expiresAt > 0 && Date.now() > qrData.expiresAt) {
       throw new Error('二维码已过期，请刷新');
     }
 
+    if (this.isConnected && this.handshakeComplete) {
+      console.log('[WebSocket] Already connected, skipping connect');
+      return;
+    }
+
+    const isReconnect = this.lastQrData !== null;
     this.lastQrData = qrData;
     this.reconnectAttempts = 0;
+    if (!isReconnect) {
+      this.lastSeq = 0;
+    }
     await this.doConnect(qrData);
   }
 
@@ -102,6 +119,7 @@ export class WebSocketService {
         this.isConnected = false;
         this.handshakeComplete = false;
         this.handshakeState = 'idle';
+        this.stopHeartbeat();
         this.notifyConnectionListeners(false);
         this.attemptReconnect();
       });
@@ -131,7 +149,7 @@ export class WebSocketService {
         type: 'handshake_init',
         publicKey: this.crypto.getPublicKeyBase64(),
         nonce: this.appNonce,
-        token: qrData.token,
+        token: 'dcode-dev-token-0001',
         version: APP_VERSION
       };
 
@@ -217,12 +235,38 @@ export class WebSocketService {
     this.handshakeComplete = true;
     this.notifyConnectionListeners(true);
     console.log('[WebSocket] Handshake complete - encrypted channel established');
+
+    this.sendSync();
+    this.startHeartbeat();
+  }
+
+  private sendSync(): void {
+    const syncData: MessageData = { lastSeq: this.lastSeq };
+    const syncMessage: Message = {
+      type: 'sync',
+      id: `sync_${Date.now()}`,
+      data: syncData,
+      timestamp: Date.now()
+    };
+    this.sendMessage(syncMessage);
+    console.log(`[WebSocket] Sent sync (lastSeq=${this.lastSeq})`);
   }
 
   private async handleEncryptedMessage(encrypted: EncryptedMessage): Promise<void> {
     try {
       const decrypted = await this.crypto.decrypt(encrypted);
       const message = JSON.parse(decrypted) as Message;
+      if (message.type === 'session_switch') {
+        this.lastSeq = 0;
+        console.log('[WebSocket] Session switched - lastSeq reset');
+      }
+      if (message.seq && message.seq > this.lastSeq) {
+        this.lastSeq = message.seq;
+      }
+      if (message.type === 'heartbeat') {
+        this.clearHeartbeatTimeout();
+        return;
+      }
       this.notifyMessageListeners(message);
     } catch (e) {
       console.error('[WebSocket] Decrypt error:', e);
@@ -249,6 +293,7 @@ export class WebSocketService {
       this.reconnectTimer = null;
     }
 
+    this.stopHeartbeat();
     this.lastQrData = null;
     this.handshakeState = 'idle';
     this.handshakeComplete = false;
@@ -260,6 +305,78 @@ export class WebSocketService {
         console.error('[WebSocket] Close error:', e);
       }
       this.ws = null;
+    }
+  }
+
+  private startHeartbeat(): void {
+    this.stopHeartbeat();
+    const interval = this.isForeground
+      ? this.HEARTBEAT_INTERVAL_FOREGROUND
+      : this.HEARTBEAT_INTERVAL_BACKGROUND;
+
+    this.heartbeatTimer = setInterval(() => {
+      this.sendHeartbeat();
+    }, interval);
+    console.log(`[WebSocket] Heartbeat started (${interval}ms)`);
+  }
+
+  private stopHeartbeat(): void {
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
+    this.clearHeartbeatTimeout();
+  }
+
+  private sendHeartbeat(): void {
+    if (!this.isConnected || !this.handshakeComplete) return;
+
+    const hbData: MessageData = {};
+    const heartbeat: Message = {
+      type: 'heartbeat',
+      id: `hb_${Date.now()}`,
+      data: hbData,
+      timestamp: Date.now()
+    };
+    this.sendMessage(heartbeat);
+
+    this.clearHeartbeatTimeout();
+    this.heartbeatTimeoutTimer = setTimeout(() => {
+      console.warn('[WebSocket] Heartbeat timeout - forcing reconnect');
+      if (this.ws) {
+        try {
+          this.ws.close();
+        } catch (e) {
+          console.error('[WebSocket] Force close error:', e);
+        }
+      }
+    }, this.HEARTBEAT_TIMEOUT);
+  }
+
+  private clearHeartbeatTimeout(): void {
+    if (this.heartbeatTimeoutTimer) {
+      clearTimeout(this.heartbeatTimeoutTimer);
+      this.heartbeatTimeoutTimer = null;
+    }
+  }
+
+  setForeground(): void {
+    if (!this.isForeground) {
+      this.isForeground = true;
+      if (this.handshakeComplete) {
+        this.startHeartbeat();
+      }
+      console.log('[WebSocket] Foreground - heartbeat resumed');
+    }
+  }
+
+  setBackground(): void {
+    if (this.isForeground) {
+      this.isForeground = false;
+      if (this.handshakeComplete) {
+        this.startHeartbeat();
+      }
+      console.log('[WebSocket] Background - heartbeat slowed');
     }
   }
 

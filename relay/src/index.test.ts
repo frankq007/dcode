@@ -1,6 +1,6 @@
 ﻿import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { WebSocket } from 'ws';
-import { RelayServer } from './index';
+import { RelayServer as RS } from './index';
 
 describe('Relay Server', () => {
   let server: any;
@@ -18,7 +18,6 @@ describe('Relay Server', () => {
   });
 
   it('should accept connections and pair gateway with app', (done) => {
-    const { RelayServer: RS } = require('./index');
     server = new RS(TEST_PORT);
 
     const token = 'test-token-123';
@@ -63,7 +62,6 @@ describe('Relay Server', () => {
   }, 10000);
 
   it('should forward messages between paired clients', (done) => {
-    const { RelayServer: RS } = require('./index');
     server = new RS(TEST_PORT);
 
     const token = 'forward-test-token';

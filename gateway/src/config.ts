@@ -10,6 +10,7 @@ export interface GatewayConfig {
   computerName: string;
   version: string;
   relayKey?: string;
+  token?: string;
 }
 
 const DEFAULT_CONFIG: GatewayConfig = {
@@ -41,6 +42,7 @@ export function loadConfig(configPath?: string): GatewayConfig {
   if (process.env.DCODE_RELAY_URL) config.relayUrl = process.env.DCODE_RELAY_URL;
   if (process.env.DCODE_OPENCODE_URL) config.opencodeUrl = process.env.DCODE_OPENCODE_URL;
   if (process.env.DCODE_COMPUTER_NAME) config.computerName = process.env.DCODE_COMPUTER_NAME;
+  if (process.env.DCODE_TOKEN) config.token = process.env.DCODE_TOKEN;
 
   for (const arg of process.argv) {
     const [key, value] = arg.split('=');

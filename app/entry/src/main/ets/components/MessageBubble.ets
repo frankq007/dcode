@@ -1,6 +1,6 @@
 import { Message, MessageData } from '../models/index';
 import { webSocketService } from '../services/WebSocketService';
-import { MarkdownText } from './MarkdownText';
+import { Markdown } from '@luvi/lv-markdown-in';
 import { MermaidDiagram } from './MermaidDiagram';
 
 @Component
@@ -28,16 +28,21 @@ export struct MessageBubble {
   UserMessage() {
     Row() {
       Blank()
-      Text(this.message.data.content || '')
-        .fontSize(14)
-        .fontColor('#ffffff')
-        .padding(12)
-        .backgroundColor('#52c41a')
-        .borderRadius(12)
-        .constraintSize({ maxWidth: '70%' })
+      Column() {
+        Text(this.message.data.content || '')
+          .fontSize(15)
+          .fontColor('#000000')
+          .textAlign(TextAlign.Start)
+          .width('100%')
+      }
+      .constraintSize({ maxWidth: '75%' })
+      .padding({ left: 12, right: 12, top: 10, bottom: 10 })
+      .backgroundColor('#95EC69')
+      .borderRadius(8)
+      .clip(true)
     }
     .width('100%')
-    .margin({ bottom: 12 })
+    .margin({ bottom: 8 })
   }
 
   @Builder
@@ -45,20 +50,16 @@ export struct MessageBubble {
     Row() {
       Column() {
         Row() {
-          Text('思考中...')
+          Text('思考')
             .fontSize(12)
             .fontColor('#999999')
-
           Blank()
-
-          Button({ type: ButtonType.Normal }) {
-            Text(this.isExpanded ? '收起' : '展开')
-              .fontSize(11)
-          }
-          .height(24)
-          .onClick(() => {
-            this.isExpanded = !this.isExpanded;
-          })
+          Text(this.isExpanded ? '收起' : '展开')
+            .fontSize(11)
+            .fontColor('#1890ff')
+            .onClick(() => {
+              this.isExpanded = !this.isExpanded;
+            })
         }
         .width('100%')
 
@@ -66,34 +67,40 @@ export struct MessageBubble {
           Text(this.message.data.content || '')
             .fontSize(13)
             .fontColor('#666666')
-            .margin({ top: 8 })
+            .margin({ top: 6 })
+            .width('100%')
         }
       }
-      .padding(12)
-      .backgroundColor('#f0f0f0')
-      .borderRadius(12)
-      .constraintSize({ maxWidth: '70%' })
+      .constraintSize({ maxWidth: '80%' })
+      .padding({ left: 12, right: 12, top: 8, bottom: 8 })
+      .backgroundColor('#F9F9F9')
+      .borderRadius(8)
+      .clip(true)
 
       Blank()
     }
     .width('100%')
-    .margin({ bottom: 12 })
+    .margin({ bottom: 8 })
   }
 
   @Builder
   ToolCallMessage() {
     Row() {
       Column() {
-        Text(`🔧 ${this.message.data.name || '未知工具'}`)
+        Text(`🔧 ${(this.message.data.toolName || this.message.data.name) as string || '工具调用'}`)
           .fontSize(13)
           .fontWeight(FontWeight.Medium)
           .fontColor('#333333')
+          .width('100%')
 
         if (this.message.data.parameters) {
           Text(`参数: ${JSON.stringify(this.message.data.parameters)}`)
             .fontSize(11)
             .fontColor('#999999')
             .margin({ top: 4 })
+            .maxLines(3)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+            .width('100%')
         }
 
         if (this.message.data.result) {
@@ -101,17 +108,21 @@ export struct MessageBubble {
             .fontSize(11)
             .fontColor('#666666')
             .margin({ top: 4 })
+            .maxLines(5)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+            .width('100%')
         }
       }
-      .padding(12)
-      .backgroundColor('#e6f7ff')
-      .borderRadius(12)
-      .constraintSize({ maxWidth: '70%' })
+      .constraintSize({ maxWidth: '80%' })
+      .padding({ left: 12, right: 12, top: 8, bottom: 8 })
+      .backgroundColor('#E8F5E9')
+      .borderRadius(8)
+      .clip(true)
 
       Blank()
     }
     .width('100%')
-    .margin({ bottom: 12 })
+    .margin({ bottom: 8 })
   }
 
   @Builder
@@ -122,11 +133,13 @@ export struct MessageBubble {
           .fontSize(13)
           .fontWeight(FontWeight.Bold)
           .fontColor('#333333')
+          .width('100%')
 
         Text(this.message.data.description || '')
           .fontSize(12)
           .fontColor('#666666')
-          .margin({ top: 8 })
+          .margin({ top: 6 })
+          .width('100%')
 
         Row() {
           Button('允许')
@@ -149,17 +162,18 @@ export struct MessageBubble {
             })
         }
         .width('100%')
-        .margin({ top: 12 })
+        .margin({ top: 10 })
       }
-      .padding(12)
-      .backgroundColor('#fff7e6')
-      .borderRadius(12)
-      .constraintSize({ maxWidth: '70%' })
+      .constraintSize({ maxWidth: '80%' })
+      .padding({ left: 12, right: 12, top: 10, bottom: 10 })
+      .backgroundColor('#FFF3E0')
+      .borderRadius(8)
+      .clip(true)
 
       Blank()
     }
     .width('100%')
-    .margin({ bottom: 12 })
+    .margin({ bottom: 8 })
   }
 
   @Builder
@@ -168,20 +182,21 @@ export struct MessageBubble {
       Column() {
         if (this.hasMermaidDiagram()) {
           MermaidDiagram({ code: this.extractMermaidCode() })
-            .margin({ bottom: 12 })
+            .margin({ bottom: 8 })
         }
 
-        MarkdownText({ markdown: this.extractMarkdownContent() })
+        Markdown({ text: this.extractMarkdownContent(), mode: 'text' })
       }
-      .padding(12)
-      .backgroundColor('#ffffff')
-      .borderRadius(12)
-      .constraintSize({ maxWidth: '70%' })
+      .constraintSize({ maxWidth: '80%' })
+      .padding({ left: 12, right: 12, top: 10, bottom: 10 })
+      .backgroundColor('#FFFFFF')
+      .borderRadius(8)
+      .clip(true)
 
       Blank()
     }
     .width('100%')
-    .margin({ bottom: 12 })
+    .margin({ bottom: 8 })
   }
 
   @Builder
@@ -191,11 +206,10 @@ export struct MessageBubble {
         .fontSize(12)
         .fontColor('#999999')
         .padding(8)
-
       Blank()
     }
     .width('100%')
-    .margin({ bottom: 12 })
+    .margin({ bottom: 8 })
   }
 
   private hasMermaidDiagram(): boolean {
@@ -231,6 +245,5 @@ export struct MessageBubble {
       timestamp: Date.now()
     };
     webSocketService.sendMessage(replyMessage);
-    console.log('Permission reply sent');
   }
 }

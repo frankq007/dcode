@@ -1,4 +1,4 @@
-﻿import { Connection } from '../models/index';
+import { Connection } from '../models/index';
 import { connectionService } from '../services/ConnectionService';
 import { ConnectionListItem } from '../components/ConnectionListItem';
 import router from '@ohos.router';
@@ -9,6 +9,8 @@ import { promptAction } from '@kit.ArkUI';
 struct ConnectionListPage {
   @State connections: Connection[] = [];
   @State isLoading: boolean = true;
+  @State quickPublicKey: string = 'qR4wESx8sqxJTlHo7wt/33NMJDUZ6CWemst6IHfB62w=';
+  @State quickToken: string = 'dcode-dev-token-0001';
 
   aboutToAppear() {
     this.loadConnections();
@@ -81,6 +83,15 @@ struct ConnectionListPage {
               .margin({ left: 12 })
               .onClick(() => {
                 router.pushUrl({ url: 'pages/ManualConnectionPage' });
+              })
+
+            Button('快速连接', { type: ButtonType.Capsule })
+              .height(40)
+              .margin({ left: 12 })
+              .backgroundColor('#52c41a')
+              .onClick(() => {
+                const qrData: string = '{"mode":"direct","name":"TestPC","host":"10.0.2.2","port":8765,"publicKey":"8eetCVOnmj3JPrn1CbWTrzGzR8Vs/EwGRmg4cXrYUgY=","token":"dcode-dev-token-0001"}';
+                router.pushUrl({ url: 'pages/ChatPage', params: { qrData: qrData } });
               })
           }
           .margin({ top: 24 })

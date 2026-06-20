@@ -3,6 +3,7 @@ import { randomUUID, randomBytes } from 'crypto';
 import { CryptoManager } from '../crypto/crypto-manager';
 import { OpencodeClient, OpencodePart, OpencodeMessageInfo } from '../opencode/opencode-client';
 import { SessionManager } from '../session/session-manager';
+import { OfflineEventBuffer } from '../session/offline-buffer';
 import { GatewayConfig } from '../config';
 import { HandshakeMessage, Message, QRCodeData } from '../types';
 
@@ -19,12 +20,13 @@ export class RelayClient {
   private handshakeState: 'waiting' | 'step1' | 'complete' = 'waiting';
   private opencode: OpencodeClient;
   private sessions: SessionManager;
+  private offlineBuffer: OfflineEventBuffer = new OfflineEventBuffer();
   private seenMessageIds: Set<string> = new Set();
 
   constructor(config: GatewayConfig) {
     this.config = config;
     this.crypto = new CryptoManager();
-    this.token = randomUUID();
+    this.token = config.token || randomUUID();
     this.opencode = new OpencodeClient(config.opencodeUrl);
     this.sessions = new SessionManager();
   }
@@ -59,6 +61,7 @@ export class RelayClient {
 
     this.ws.on('close', () => {
       console.log('[Relay] Disconnected from relay server');
+      this.cleanupConnection();
       this.attemptReconnect();
     });
 
@@ -240,6 +243,9 @@ export class RelayClient {
       case 'token_query':
         this.handleTokenQuery();
         break;
+      case 'sync':
+        this.handleSync(message);
+        break;
       case 'heartbeat':
         this.sendEncryptedMessage({
           type: 'heartbeat',
@@ -276,6 +282,24 @@ export class RelayClient {
       }
     } catch (e: any) {
       this.sendError(`Failed to get token usage: ${e.message}`, 'INTERNAL');
+    }
+  }
+
+  private handleSync(message: Message): void {
+    const session = this.sessions.getActive();
+    if (!session) {
+      console.warn('[Relay] Sync received but no active session');
+      return;
+    }
+
+    const lastSeq = (message.data as any).lastSeq || 0;
+    console.log(`[Relay] Sync request: lastSeq=${lastSeq}, session=${session.id}`);
+
+    const events = this.offlineBuffer.since(session.id, lastSeq);
+    console.log(`[Relay] Replaying ${events.length} offline events for session ${session.id}`);
+
+    for (const event of events) {
+      this.sendEncryptedMessage(event);
     }
   }
 
@@ -378,6 +402,7 @@ export class RelayClient {
     try {
       await this.opencode.deleteSession(message.data.sessionId);
       this.sessions.delete(message.data.sessionId);
+      this.offlineBuffer.clearSession(message.data.sessionId);
       await this.pushSessionList();
     } catch (e: any) {
       this.sendError(`Failed to delete session: ${e.message}`, 'INTERNAL');
@@ -385,9 +410,22 @@ export class RelayClient {
   }
 
   private sendEncryptedMessage(message: Message): void {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    if (this.offlineBuffer.isEventType(message.type)) {
+      const session = this.sessions.getActive();
+      if (session) {
+        const seq = this.offlineBuffer.nextSeq(session.id);
+        message.seq = seq;
+        this.offlineBuffer.store(session.id, message);
+        this.sessions.updateSeq(session.id, seq);
+      }
+    }
+
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      console.log(`[Relay] Socket closed, event buffered (type=${message.type}, seq=${message.seq})`);
+      return;
+    }
     if (this.handshakeState !== 'complete') return;
-    
+
     const plaintext = JSON.stringify(message);
     const encrypted = this.crypto.encrypt(plaintext);
     this.ws.send(JSON.stringify(encrypted));

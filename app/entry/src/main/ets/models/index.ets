@@ -47,11 +47,13 @@ export type MessageType =
   | 'token_query'
   | 'history'
   | 'heartbeat'
+  | 'sync'
   | 'error';
 
 export interface MessageData {
   content?: string;
   name?: string;
+  toolName?: string;
   parameters?: string | object;
   result?: string;
   description?: string;
@@ -73,6 +75,7 @@ export interface MessageData {
   status?: string;
   code?: string;
   message?: string;
+  lastSeq?: number;
 }
 
 export interface Message {

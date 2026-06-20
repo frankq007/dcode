@@ -4,7 +4,7 @@ import { webSocketService } from '../services/WebSocketService';
 import { voiceService } from '../services/VoiceService';
 import { MessageBubble } from '../components/MessageBubble';
 import router from '@ohos.router';
-import { promptAction } from '@kit.ArkUI';
+import { promptAction, KeyboardAvoidMode } from '@kit.ArkUI';
 
 interface ChatPageParams {
   connectionId?: string;
@@ -28,6 +28,7 @@ struct ChatPage {
 
   private connection: Connection | null = null;
   private scroller: Scroller = new Scroller();
+  private wsListenersRegistered: boolean = false;
 
   aboutToAppear() {
     const params = router.getParams() as ChatPageParams;
@@ -53,8 +54,17 @@ struct ChatPage {
       }
     }
 
+    this.setKeyboardAvoidMode();
     this.setupWebSocket();
     this.setupVoiceInput();
+  }
+
+  private setKeyboardAvoidMode() {
+    try {
+      this.getUIContext().setKeyboardAvoidMode(KeyboardAvoidMode.RESIZE);
+    } catch (e) {
+      console.error('[ChatPage] setKeyboardAvoidMode error:', e);
+    }
   }
 
   setupWebSocket() {
@@ -63,23 +73,26 @@ struct ChatPage {
     const qrData: QRCodeData = {
       mode: this.connection.mode,
       name: this.connection.name,
-      host: this.connection.host,
+      host: '10.0.2.2',
       port: this.connection.port,
       publicKey: this.connection.publicKey,
       token: this.connection.token,
       relayUrl: this.connection.relayUrl
     };
 
-    webSocketService.onConnectionChange((connected: boolean) => {
-      this.isConnected = connected;
-      if (connected && this.connection) {
-        connectionService.updateOnlineStatus(this.connection.id, true);
-      }
-    });
+    if (!this.wsListenersRegistered) {
+      webSocketService.onConnectionChange((connected: boolean) => {
+        this.isConnected = connected;
+        if (connected && this.connection) {
+          connectionService.updateOnlineStatus(this.connection.id, true);
+        }
+      });
 
-    webSocketService.onMessage((message: Message) => {
-      this.handleIncomingMessage(message);
-    });
+      webSocketService.onMessage((message: Message) => {
+        this.handleIncomingMessage(message);
+      });
+      this.wsListenersRegistered = true;
+    }
 
     webSocketService.connect(qrData);
   }
@@ -113,7 +126,15 @@ struct ChatPage {
       case 'history': {
         this.loadingHistory = false;
         const historyMessages = message.data.messages || [];
-        this.messages = historyMessages.map((m: object) => this.mapHistoryMessage(m));
+        const mapped = historyMessages.map((m: object) => this.mapHistoryMessage(m));
+        const existingIds = new Set<string>();
+        this.messages.forEach((m: Message) => existingIds.add(m.id));
+        for (const msg of mapped) {
+          if (!existingIds.has(msg.id)) {
+            this.messages.push(msg);
+          }
+        }
+        this.scrollToBottom();
         break;
       }
       case 'token_info': {
@@ -145,6 +166,7 @@ struct ChatPage {
       case 'permission_request':
       default: {
         this.handleStreamMessage(message);
+        this.scrollToBottom();
         break;
       }
     }
@@ -155,28 +177,18 @@ struct ChatPage {
     if (stream === 'append') {
       const existing = this.messages.findIndex((m: Message) => m.id === message.id);
       if (existing >= 0) {
-        const updated = this.messages[existing];
-        updated.data.content = (updated.data.content || '') + (message.data.content || '');
-        this.messages.splice(existing, 1, updated);
-      }
-      return;
-    }
-
-    if (stream === 'replace') {
-      const existing = this.messages.findIndex((m: Message) => m.id === message.id);
-      if (existing >= 0) {
-        const updated = this.messages[existing];
-        updated.data = message.data;
-        this.messages.splice(existing, 1, updated);
-      }
-      return;
-    }
-
-    if (stream === 'end' || stream === 'aborted') {
-      const existing = this.messages.findIndex((m: Message) => m.id === message.id);
-      if (existing >= 0) {
-        const updated = this.messages[existing];
-        updated.data = message.data;
+        const old = this.messages[existing];
+        const newData: MessageData = {
+          content: (old.data.content || '') + (message.data.content || '')
+        };
+        const updated: Message = {
+          type: old.type,
+          id: old.id,
+          seq: old.seq,
+          stream: old.stream,
+          data: newData,
+          timestamp: old.timestamp
+        };
         this.messages.splice(existing, 1, updated);
       } else {
         this.messages.push(message);
@@ -184,7 +196,35 @@ struct ChatPage {
       return;
     }
 
+    if (stream === 'replace') {
+      const existing = this.messages.findIndex((m: Message) => m.id === message.id);
+      if (existing >= 0) {
+        this.messages.splice(existing, 1, message);
+      } else {
+        this.messages.push(message);
+      }
+      return;
+    }
+
+    if (stream === 'end' || stream === 'aborted') {
+      const existing = this.messages.findIndex((m: Message) => m.id === message.id);
+      if (existing >= 0) {
+        this.messages.splice(existing, 1, message);
+      } else {
+        this.messages.push(message);
+      }
+      return;
+    }
+
     this.messages.push(message);
+  }
+
+  private scrollToBottom() {
+    setTimeout(() => {
+      if (this.scroller) {
+        this.scroller.scrollEdge(Edge.Bottom);
+      }
+    }, 50);
   }
 
   private mapHistoryMessage(m: object): Message {
@@ -226,12 +266,7 @@ struct ChatPage {
     webSocketService.sendMessage(message);
     this.messages.push(message);
     this.inputText = '';
-
-    setTimeout(() => {
-      if (this.scroller) {
-        this.scroller.scrollEdge(Edge.Bottom);
-      }
-    }, 100);
+    this.scrollToBottom();
   }
 
   createSession() {
@@ -292,132 +327,148 @@ struct ChatPage {
     return `${totalK}k/${limitK}k`;
   }
 
+  @Builder
+  TitleBar() {
+    Row() {
+      Button({ type: ButtonType.Circle }) {
+        Text('\u2190')
+          .fontSize(20)
+      }
+      .width(40)
+      .height(40)
+      .onClick(() => {
+        webSocketService.disconnect();
+        router.back();
+      })
+
+      Column() {
+        Text(this.currentSession?.name || '加载中...')
+          .fontSize(16)
+          .fontWeight(FontWeight.Bold)
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .onClick(() => {
+            this.showSessionSwitcher();
+          })
+
+        Row() {
+          Circle({ width: 8, height: 8 })
+            .fill(this.isConnected ? '#52c41a' : '#ff4d4f')
+            .margin({ right: 4 })
+
+          Text(this.isConnected ? '已连接' : '未连接')
+            .fontSize(11)
+            .fontColor('#999999')
+        }
+        .margin({ top: 2 })
+      }
+      .alignItems(HorizontalAlign.Start)
+      .layoutWeight(1)
+      .margin({ left: 12 })
+
+      Text(this.tokenUsageText)
+        .fontSize(12)
+        .fontColor(this.tokenTotal > this.tokenLimit * 0.8 ? '#ff4d4f' : '#52c41a')
+        .padding({ left: 8, right: 8, top: 4, bottom: 4 })
+        .borderRadius(12)
+        .backgroundColor('#f6ffed')
+
+      Button({ type: ButtonType.Normal }) {
+        Text('\u22ee')
+          .fontSize(20)
+      }
+      .width(40)
+      .height(40)
+      .onClick(() => {
+        this.showMenu();
+      })
+    }
+    .width('100%')
+    .height(56)
+    .padding({ left: 12, right: 12 })
+    .backgroundColor('#ffffff')
+  }
+
+  @Builder
+  ChatArea() {
+    if (this.loadingHistory) {
+      Column() {
+        LoadingProgress()
+          .width(32)
+          .height(32)
+          .color('#999999')
+        Text('加载历史消息...')
+          .fontSize(13)
+          .fontColor('#999999')
+          .margin({ top: 8 })
+      }
+      .width('100%')
+      .layoutWeight(1)
+      .justifyContent(FlexAlign.Center)
+    } else {
+      List({ scroller: this.scroller }) {
+        ForEach(this.messages, (message: Message) => {
+          ListItem() {
+            MessageBubble({ message: message })
+          }
+        }, (message: Message) => message.id)
+      }
+      .width('100%')
+      .layoutWeight(1)
+      .padding({ left: 12, right: 12, top: 8, bottom: 8 })
+      .scrollBar(BarState.Off)
+      .edgeEffect(EdgeEffect.Spring)
+    }
+  }
+
+  @Builder
+  InputBar() {
+    Row() {
+      Button({ type: ButtonType.Circle }) {
+        Text(this.isRecording ? '\u23f9' : '\ud83c\udf99')
+          .fontSize(20)
+      }
+      .width(40)
+      .height(40)
+      .backgroundColor(this.isRecording ? '#ff4d4f' : '#f0f0f0')
+      .onClick(() => {
+        this.toggleVoiceInput();
+      })
+
+      TextInput({ text: this.inputText, placeholder: '输入消息...' })
+        .layoutWeight(1)
+        .margin({ left: 8, right: 8 })
+        .height(40)
+        .borderRadius(20)
+        .backgroundColor('#f5f5f5')
+        .onChange((value: string) => {
+          this.inputText = value;
+        })
+        .onSubmit(() => {
+          this.sendMessage();
+        })
+
+      Button('发送')
+        .height(40)
+        .fontSize(14)
+        .onClick(() => {
+          this.sendMessage();
+        })
+    }
+    .width('100%')
+    .padding({ left: 12, right: 12, top: 8, bottom: 8 })
+    .backgroundColor('#ffffff')
+  }
+
   build() {
     Column() {
-      Row() {
-        Button({ type: ButtonType.Circle }) {
-          Text('\u2190')
-            .fontSize(20)
-        }
-        .width(40)
-        .height(40)
-        .onClick(() => {
-          webSocketService.disconnect();
-          router.back();
-        })
-
-        Column() {
-          Text(this.currentSession?.name || '加载中...')
-            .fontSize(16)
-            .fontWeight(FontWeight.Bold)
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-            .onClick(() => {
-              this.showSessionSwitcher();
-            })
-
-          Row() {
-            Circle({ width: 8, height: 8 })
-              .fill(this.isConnected ? '#52c41a' : '#ff4d4f')
-              .margin({ right: 4 })
-
-            Text(this.isConnected ? '已连接' : '未连接')
-              .fontSize(11)
-              .fontColor('#999999')
-          }
-          .margin({ top: 2 })
-        }
-        .alignItems(HorizontalAlign.Start)
-        .layoutWeight(1)
-        .margin({ left: 12 })
-
-        Text(this.tokenUsageText)
-          .fontSize(12)
-          .fontColor(this.tokenTotal > this.tokenLimit * 0.8 ? '#ff4d4f' : '#52c41a')
-          .padding({ left: 8, right: 8, top: 4, bottom: 4 })
-          .borderRadius(12)
-          .backgroundColor('#f6ffed')
-
-        Button({ type: ButtonType.Normal }) {
-          Text('\u22ee')
-            .fontSize(20)
-        }
-        .width(40)
-        .height(40)
-        .onClick(() => {
-          this.showMenu();
-        })
-      }
-      .width('100%')
-      .padding({ left: 16, right: 16, top: 12, bottom: 12 })
-      .backgroundColor('#ffffff')
-
-      if (this.loadingHistory) {
-        Column() {
-          LoadingProgress()
-            .width(32)
-            .height(32)
-            .color('#999999')
-          Text('加载历史消息...')
-            .fontSize(13)
-            .fontColor('#999999')
-            .margin({ top: 8 })
-        }
-        .width('100%')
-        .layoutWeight(1)
-        .justifyContent(FlexAlign.Center)
-      } else {
-        List({ scroller: this.scroller }) {
-          ForEach(this.messages, (message: Message) => {
-            ListItem() {
-              MessageBubble({ message: message })
-            }
-          }, (message: Message) => message.id)
-        }
-        .width('100%')
-        .layoutWeight(1)
-        .padding({ left: 16, right: 16 })
-        .scrollBar(BarState.Off)
-      }
-
-      Row() {
-        Button({ type: ButtonType.Circle }) {
-          Text(this.isRecording ? '\u23f9' : '\ud83c\udf99')
-            .fontSize(20)
-        }
-        .width(44)
-        .height(44)
-        .backgroundColor(this.isRecording ? '#ff4d4f' : '#f0f0f0')
-        .onClick(() => {
-          this.toggleVoiceInput();
-        })
-
-        TextInput({ text: this.inputText, placeholder: '输入消息...' })
-          .layoutWeight(1)
-          .margin({ left: 8, right: 8 })
-          .height(44)
-          .borderRadius(22)
-          .backgroundColor('#f5f5f5')
-          .onChange((value: string) => {
-            this.inputText = value;
-          })
-          .onSubmit(() => {
-            this.sendMessage();
-          })
-
-        Button('发送')
-          .height(44)
-          .onClick(() => {
-            this.sendMessage();
-          })
-      }
-      .width('100%')
-      .padding(12)
-      .backgroundColor('#ffffff')
+      this.TitleBar()
+      this.ChatArea()
+      this.InputBar()
     }
     .width('100%')
     .height('100%')
-    .backgroundColor('#f5f5f5')
+    .backgroundColor('#ededed')
   }
 
   showSessionSwitcher() {
@@ -464,8 +515,6 @@ struct ChatPage {
   }
 
   aboutToDisappear() {
-    webSocketService.disconnect();
-    voiceService.cleanup();
     if (this.connection) {
       connectionService.updateOnlineStatus(this.connection.id, false);
     }

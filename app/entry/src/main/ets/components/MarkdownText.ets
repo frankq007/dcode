@@ -27,44 +27,67 @@ interface Match {
   style: SpanStyle;
 }
 
+interface Block {
+  type: string;
+  code: string;
+  spans: Span[];
+}
+
 @Component
 export struct MarkdownText {
-  @Prop markdown: string = '';
-  @State renderedText: Span[] = [];
+  @Prop @Watch('onMarkdownChange') markdown: string = '';
+  @State blocks: Block[] = [];
 
   aboutToAppear() {
     this.parseMarkdown();
   }
 
+  onMarkdownChange() {
+    this.parseMarkdown();
+  }
+
   private parseMarkdown() {
     if (!this.markdown) {
-      this.renderedText = [];
+      this.blocks = [];
       return;
     }
 
-    const spans: Span[] = [];
+    const blocks: Block[] = [];
     const lines = this.markdown.split('\n');
     let inCodeBlock = false;
     let codeContent = '';
+    let pendingParagraphLines: string[] = [];
+
+    const flushParagraph = () => {
+      if (pendingParagraphLines.length === 0) {
+        return;
+      }
+      const spans: Span[] = [];
+      for (let i = 0; i < pendingParagraphLines.length; i++) {
+        this.parseInlineFormatting(pendingParagraphLines[i], spans);
+        const emptyStyle: SpanStyle = {};
+        spans.push({ text: '\n', style: emptyStyle });
+      }
+      if (spans.length > 0) {
+        spans.pop();
+      }
+      const paragraphBlock: Block = { type: 'paragraph', code: '', spans: spans };
+      blocks.push(paragraphBlock);
+      pendingParagraphLines = [];
+    };
 
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
 
       if (line.trim().startsWith('```')) {
         if (inCodeBlock) {
-          const codeStyle: SpanStyle = {
-            fontFamily: 'monospace',
-            backgroundColor: '#f5f5f5',
-            padding: 8,
-            borderRadius: 4
-          };
-          spans.push({
-            text: '\n' + codeContent + '\n',
-            style: codeStyle
-          });
+          const code: string = codeContent.replace(/\n$/, '');
+          const codeBlock: Block = { type: 'code', code: code, spans: [] };
+          blocks.push(codeBlock);
           codeContent = '';
           inCodeBlock = false;
         } else {
+          flushParagraph();
           inCodeBlock = true;
         }
         continue;
@@ -75,12 +98,12 @@ export struct MarkdownText {
         continue;
       }
 
-      this.parseInlineFormatting(line, spans);
-      const emptyStyle: SpanStyle = {};
-      spans.push({ text: '\n', style: emptyStyle });
+      pendingParagraphLines.push(line);
     }
 
-    this.renderedText = spans;
+    flushParagraph();
+
+    this.blocks = blocks;
   }
 
   private parseInlineFormatting(line: string, spans: Span[]) {
@@ -144,27 +167,49 @@ export struct MarkdownText {
 
   build() {
     Column() {
-      if (this.renderedText.length === 0) {
+      if (this.blocks.length === 0) {
         Text(this.markdown)
           .fontSize(14)
           .fontColor('#333333')
           .lineHeight(20)
+          .width('100%')
       } else {
-        Text() {
-          ForEach(this.renderedText, (span: Span) => {
-            Span(span.text)
-              .fontSize(span.style.fontSize || 14)
-              .fontColor(span.style.fontColor || '#333333')
-              .fontWeight(span.style.fontWeight || FontWeight.Normal)
-              .fontStyle(span.style.fontStyle || FontStyle.Normal)
-              .fontFamily(span.style.fontFamily || 'sans-serif')
-              .decoration({ type: span.style.textDecoration || TextDecorationType.None })
-              .backgroundColor(span.style.backgroundColor || 'transparent')
-          })
-        }
-        .width('100%')
-        .lineHeight(20)
+        ForEach(this.blocks, (block: Block) => {
+          if (block.type === 'code') {
+            Scroll() {
+              Text(block.code)
+                .fontSize(13)
+                .fontFamily('monospace')
+                .fontColor('#333333')
+                .backgroundColor('#f5f5f5')
+                .padding(8)
+                .borderRadius(4)
+                .lineHeight(18)
+            }
+            .scrollable(ScrollDirection.Horizontal)
+            .constraintSize({ maxWidth: '100%' })
+            .margin({ top: 4, bottom: 4 })
+          } else {
+            Text() {
+              ForEach(block.spans, (span: Span) => {
+                Span(span.text)
+                  .fontSize(span.style.fontSize || 14)
+                  .fontColor(span.style.fontColor || '#333333')
+                  .fontWeight(span.style.fontWeight || FontWeight.Normal)
+                  .fontStyle(span.style.fontStyle || FontStyle.Normal)
+                  .fontFamily(span.style.fontFamily || 'sans-serif')
+                  .decoration({ type: span.style.textDecoration || TextDecorationType.None })
+                  .backgroundColor(span.style.backgroundColor || 'transparent')
+              })
+            }
+            .constraintSize({ maxWidth: '100%' })
+            .lineHeight(20)
+          }
+        })
       }
     }
+    .width('100%')
+    .constraintSize({ maxWidth: '100%' })
+    .clip(true)
   }
 }

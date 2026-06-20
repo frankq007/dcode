@@ -6,13 +6,13 @@ import router from '@ohos.router';
 @Entry
 @Component
 struct ManualConnectionPage {
-  @State name: string = '';
-  @State host: string = '';
+  @State name: string = 'MyPC';
+  @State host: string = '100.117.37.34';
   @State port: string = '8765';
   @State mode: 'direct' | 'relay' = 'direct';
   @State relayUrl: string = '';
   @State publicKey: string = '';
-  @State token: string = '';
+  @State token: string = 'dcode-dev-token-0001';
 
   build() {
     Column() {
@@ -190,7 +190,7 @@ struct ManualConnectionPage {
   }
 
   async saveAndConnect() {
-    if (!this.name || !this.host || !this.port || !this.publicKey || !this.token) {
+    if (!this.name || !this.host || !this.port || !this.token) {
       promptAction.showToast({ message: '请填写所有必填字段' });
       return;
     }
