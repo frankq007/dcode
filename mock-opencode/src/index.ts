@@ -1,5 +1,6 @@
 import { createServer, IncomingMessage, ServerResponse } from 'http';
 import { randomBytes } from 'crypto';
+import { fileURLToPath } from 'url';
 
 interface MockSession {
   id: string;
@@ -337,7 +338,7 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
 
 const server = createServer(handleRequest);
 
-const isMainModule = import.meta.url === `file://${process.argv[1]}`;
+const isMainModule = !process.env.VITEST && process.argv[1]?.endsWith('index.ts') || process.argv[1]?.endsWith('index.js');
 
 if (isMainModule) {
   server.listen(PORT, () => {
