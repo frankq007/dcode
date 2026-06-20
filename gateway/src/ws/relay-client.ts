@@ -135,6 +135,14 @@ export class RelayClient {
       this.handshakeState = 'complete';
       console.log('[Relay] Handshake complete: session key verified');
 
+      // Send connection ack immediately to prevent WebSocket idle timeout
+      this.sendEncryptedMessage({
+        type: 'reply',
+        id: randomUUID(),
+        data: { content: '连接成功，正在加载会话...' },
+        timestamp: Date.now()
+      });
+
       this.initializeFirstSession().catch((e: any) => {
         console.error('[Relay] Session initialization failed:', e.message);
         this.sendError(`Session initialization failed: ${e.message}`, 'INTERNAL');

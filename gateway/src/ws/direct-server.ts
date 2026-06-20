@@ -136,6 +136,14 @@ export class DirectServer {
       this.handshakeState = 'complete';
       console.log('[Direct] Handshake complete: session key verified');
 
+      // Send connection ack immediately to prevent WebSocket idle timeout
+      this.sendEncryptedMessage({
+        type: 'reply',
+        id: randomUUID(),
+        data: { content: '连接成功，正在加载会话...' },
+        timestamp: Date.now()
+      });
+
       this.initializeFirstSession().catch((e: any) => {
         console.error('[Direct] Session initialization failed:', e.message);
         this.sendError(`Session initialization failed: ${e.message}`, 'INTERNAL');
@@ -144,29 +152,13 @@ export class DirectServer {
   }
 
   private async initializeFirstSession(): Promise<void> {
-    let activeSessionId: string | null = null;
-
-    try {
-      const existing = await this.opencode.listSessions();
-      if (existing.length > 0) {
-        for (const s of existing) {
-          this.sessions.create(s.id, s.title);
-        }
-        activeSessionId = existing[0].id;
-        this.sessions.switch(activeSessionId);
-      }
-    } catch (e: any) {
-      console.warn('[Direct] Failed to list sessions, will create new:', e.message);
-    }
-
-    if (!activeSessionId) {
-      const created = await this.opencode.createSession();
-      this.sessions.create(created.id, created.title);
-      activeSessionId = created.id;
-    }
+    // Create a fresh session to avoid old context slowing down AI response
+    const created = await this.opencode.createSession();
+    this.sessions.create(created.id, created.title);
+    console.log(`[Direct] Created new session: ${created.title} (${created.id})`);
 
     await this.pushSessionList();
-    await this.pushHistory(activeSessionId);
+    await this.pushHistory(created.id);
   }
 
   private async pushSessionList(): Promise<void> {
