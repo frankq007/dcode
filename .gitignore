@@ -19,3 +19,10 @@ test_bt.js
 test_script.js
 fix_build.js
 fix_ets.js
+# Temp test files
+gw-out*.txt
+gw*.txt
+layout*.xml
+oc-*.txt
+screen.jpeg
+

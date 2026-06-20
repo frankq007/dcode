@@ -9,6 +9,7 @@ export interface GatewayConfig {
   opencodeUrl: string;
   computerName: string;
   version: string;
+  relayKey?: string;
 }
 
 const DEFAULT_CONFIG: GatewayConfig = {

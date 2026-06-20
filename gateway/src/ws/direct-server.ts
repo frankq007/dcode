@@ -180,14 +180,15 @@ export class DirectServer {
 
   private async pushHistory(sessionId: string): Promise<void> {
     try {
-      const history = await this.opencode.getMessages(sessionId);
+      const allHistory = await this.opencode.getMessages(sessionId);
+      const recent = allHistory.slice(-20);
       this.sendEncryptedMessage({
         type: 'history',
         id: randomUUID(),
         data: {
           sessionId,
-          messages: history,
-          hasMore: false,
+          messages: recent,
+          hasMore: allHistory.length > 20,
           cursor: undefined
         },
         timestamp: Date.now()

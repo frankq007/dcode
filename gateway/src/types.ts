@@ -25,6 +25,7 @@ export interface Message {
   type: MessageType;
   id: string;
   seq?: number;
+  stream?: string;
   data: any;
   timestamp: number;
 }

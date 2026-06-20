@@ -104,11 +104,7 @@ export class OpencodeClient {
   }
 
   async sendMessage(sessionId: string, text: string, onPart?: PartHandler): Promise<OpencodeMessage> {
-    const url = onPart
-      ? `${this.baseUrl}/session/${sessionId}/message?subscribe=true`
-      : `${this.baseUrl}/session/${sessionId}/message`;
-
-    const response = await fetch(url, {
+    const response = await fetch(`${this.baseUrl}/session/${sessionId}/message`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ parts: [{ type: 'text', text }] })
@@ -118,63 +114,16 @@ export class OpencodeClient {
       throw new Error(`Failed to send message: ${response.status} ${response.statusText}`);
     }
 
-    if (onPart) {
-      return this.readStreamingResponse(response, onPart);
-    }
-
     const data = await response.json() as any;
-    return { info: data.info, parts: data.parts || [] };
-  }
+    const message: OpencodeMessage = { info: data.info, parts: data.parts || [] };
 
-  private async readStreamingResponse(response: Response, onPart: PartHandler): Promise<OpencodeMessage> {
-    const reader = response.body?.getReader();
-    if (!reader) {
-      const data = await response.json() as any;
-      return { info: data.info, parts: data.parts || [] };
-    }
-
-    const decoder = new TextDecoder();
-    let fullText = '';
-    let lastParsedParts: any[] = [];
-    let messageInfo: any = {};
-    const seenIds = new Set<string>();
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      fullText += decoder.decode(value, { stream: true });
-
-      try {
-        const parsed = JSON.parse(fullText);
-        messageInfo = parsed.info || messageInfo;
-        const currentParts = parsed.parts || [];
-        for (const part of currentParts) {
-          if (part.id && !seenIds.has(part.id)) {
-            seenIds.add(part.id);
-            onPart(part, messageInfo);
-          }
-        }
-        lastParsedParts = currentParts;
-      } catch {
-        // Not yet complete JSON, continue accumulating
+    if (onPart) {
+      for (const part of message.parts) {
+        onPart(part, message.info);
       }
     }
 
-    try {
-      const final = JSON.parse(fullText);
-      messageInfo = final.info || messageInfo;
-      const finalParts = final.parts || lastParsedParts;
-      for (const part of finalParts) {
-        if (part.id && !seenIds.has(part.id)) {
-          seenIds.add(part.id);
-          onPart(part, messageInfo);
-        }
-      }
-      return { info: messageInfo, parts: finalParts };
-    } catch {
-      return { info: messageInfo, parts: lastParsedParts };
-    }
+    return message;
   }
 
   async respondPermission(permissionId: string, allow: boolean): Promise<void> {
