@@ -290,6 +290,7 @@ export class DirectServer {
         this.sendEncryptedMessage({
           type: 'thinking',
           id: part.id,
+          stream: 'end',
           data: { content: part.text || '' },
           timestamp: Date.now()
         });
@@ -298,6 +299,7 @@ export class DirectServer {
         this.sendEncryptedMessage({
           type: 'reply',
           id: part.id,
+          stream: 'end',
           data: { content: part.text || '' },
           timestamp: Date.now()
         });
@@ -306,6 +308,7 @@ export class DirectServer {
         this.sendEncryptedMessage({
           type: 'tool_call',
           id: part.id,
+          stream: 'end',
           data: {
             toolName: part.toolName || 'unknown',
             parameters: part.input || {},

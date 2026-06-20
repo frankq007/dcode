@@ -11,11 +11,6 @@ interface ChatPageParams {
   qrData?: string;
 }
 
-interface UsageInfo {
-  total: number;
-  limit: number;
-}
-
 @Entry
 @Component
 struct ChatPage {
@@ -24,11 +19,15 @@ struct ChatPage {
   @State currentSession: Session | null = null;
   @State sessions: Session[] = [];
   @State isConnected: boolean = false;
-  @State tokenUsage: string = '0/4k';
+  @State tokenTotal: number = 0;
+  @State tokenLimit: number = 4096;
   @State isRecording: boolean = false;
   @State reviewUrl: string = '';
+  @State loadingHistory: boolean = false;
+  @State pendingMessageIds: Set<string> = new Set();
 
   private connection: Connection | null = null;
+  private scroller: Scroller = new Scroller();
 
   aboutToAppear() {
     const params = router.getParams() as ChatPageParams;
@@ -93,27 +92,123 @@ struct ChatPage {
   }
 
   handleIncomingMessage(message: Message) {
-    if (message.type === 'session_list') {
-      const sessions: Session[] = message.data.sessions || [];
-      this.sessions = sessions;
-    } else if (message.type === 'session_switch') {
-      this.currentSession = {
-        id: message.data.sessionId || '',
-        name: message.data.name || '',
-        createdAt: Date.now(),
-        lastActivity: Date.now()
-      };
-    } else if (message.type === 'token_info') {
-      const usage: UsageInfo = {
-        total: (message.data.total || 0) as number,
-        limit: (message.data.limit || 4000) as number
-      };
-      this.tokenUsage = `${usage.total}/${usage.limit}`;
-    } else if (message.type === 'review_url') {
-      this.reviewUrl = message.data.url || '';
-    } else {
-      this.messages.push(message);
+    switch (message.type) {
+      case 'session_list': {
+        const sessions: Session[] = message.data.sessions || [];
+        this.sessions = sessions;
+        if (sessions.length > 0 && !this.currentSession) {
+          this.currentSession = sessions[0];
+        }
+        break;
+      }
+      case 'session_switch': {
+        this.currentSession = {
+          id: message.data.sessionId || '',
+          name: message.data.name || '',
+          createdAt: Date.now(),
+          lastActivity: Date.now()
+        };
+        break;
+      }
+      case 'history': {
+        this.loadingHistory = false;
+        const historyMessages = message.data.messages || [];
+        this.messages = historyMessages.map((m: object) => this.mapHistoryMessage(m));
+        break;
+      }
+      case 'token_info': {
+        this.tokenTotal = message.data.total || 0;
+        this.tokenLimit = message.data.contextWindow || 4096;
+        break;
+      }
+      case 'review_url': {
+        this.reviewUrl = message.data.url || '';
+        break;
+      }
+      case 'message_ack': {
+        const msgId = message.data.id;
+        if (msgId) {
+          this.pendingMessageIds.delete(msgId);
+        }
+        break;
+      }
+      case 'error': {
+        const code = message.data.code || '';
+        const msg = message.data.message || '未知错误';
+        console.error('[ChatPage] Error:', code, msg);
+        promptAction.showToast({ message: msg });
+        break;
+      }
+      case 'thinking':
+      case 'reply':
+      case 'tool_call':
+      case 'permission_request':
+      default: {
+        this.handleStreamMessage(message);
+        break;
+      }
     }
+  }
+
+  private handleStreamMessage(message: Message) {
+    const stream = message.stream;
+    if (stream === 'append') {
+      const existing = this.messages.findIndex((m: Message) => m.id === message.id);
+      if (existing >= 0) {
+        const updated = this.messages[existing];
+        updated.data.content = (updated.data.content || '') + (message.data.content || '');
+        this.messages.splice(existing, 1, updated);
+      }
+      return;
+    }
+
+    if (stream === 'replace') {
+      const existing = this.messages.findIndex((m: Message) => m.id === message.id);
+      if (existing >= 0) {
+        const updated = this.messages[existing];
+        updated.data = message.data;
+        this.messages.splice(existing, 1, updated);
+      }
+      return;
+    }
+
+    if (stream === 'end' || stream === 'aborted') {
+      const existing = this.messages.findIndex((m: Message) => m.id === message.id);
+      if (existing >= 0) {
+        const updated = this.messages[existing];
+        updated.data = message.data;
+        this.messages.splice(existing, 1, updated);
+      } else {
+        this.messages.push(message);
+      }
+      return;
+    }
+
+    this.messages.push(message);
+  }
+
+  private mapHistoryMessage(m: object): Message {
+    const msg = m as Record<string, Object>;
+    const info = (msg['info'] || {}) as Record<string, Object>;
+    const parts = (msg['parts'] || []) as Object[];
+    const role = (info['role'] as string) || 'user';
+
+    let content = '';
+    for (const p of parts) {
+      const part = p as Record<string, Object>;
+      if (part['type'] === 'text') {
+        content = (part['text'] as string) || '';
+        break;
+      }
+    }
+
+    const timeObj = (info['time'] || {}) as Record<string, number>;
+    return {
+      type: role === 'assistant' ? 'reply' : 'user_message',
+      id: (info['id'] as string) || `hist_${Date.now()}_${Math.random()}`,
+      data: { content },
+      timestamp: timeObj['created'] || Date.now()
+    };
   }
 
   sendMessage() {
@@ -127,13 +222,20 @@ struct ChatPage {
       timestamp: Date.now()
     };
 
+    this.pendingMessageIds.add(message.id);
     webSocketService.sendMessage(message);
     this.messages.push(message);
     this.inputText = '';
+
+    setTimeout(() => {
+      if (this.scroller) {
+        this.scroller.scrollEdge(Edge.Bottom);
+      }
+    }, 100);
   }
 
   createSession() {
-    const data: MessageData = { name: '新会话' };
+    const data: MessageData = {};
     const message: Message = {
       type: 'session_create',
       id: `msg_${Date.now()}`,
@@ -145,6 +247,9 @@ struct ChatPage {
   }
 
   switchSession(sessionId: string) {
+    this.messages = [];
+    this.loadingHistory = true;
+
     const data: MessageData = { sessionId };
     const message: Message = {
       type: 'session_switch',
@@ -163,7 +268,7 @@ struct ChatPage {
         params: { url: this.reviewUrl, title: 'Code Review' }
       });
     } else {
-      promptAction.showToast({ message: 'No review URL available' });
+      promptAction.showToast({ message: '暂无审查页面' });
     }
   }
 
@@ -179,6 +284,12 @@ struct ChatPage {
       console.error('[ChatPage] Voice input error:', error);
       this.isRecording = false;
     }
+  }
+
+  private get tokenUsageText(): string {
+    const totalK = Math.round(this.tokenTotal / 1000 * 10) / 10;
+    const limitK = Math.round(this.tokenLimit / 1000 * 10) / 10;
+    return `${totalK}k/${limitK}k`;
   }
 
   build() {
@@ -199,6 +310,8 @@ struct ChatPage {
           Text(this.currentSession?.name || '加载中...')
             .fontSize(16)
             .fontWeight(FontWeight.Bold)
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
             .onClick(() => {
               this.showSessionSwitcher();
             })
@@ -218,9 +331,9 @@ struct ChatPage {
         .layoutWeight(1)
         .margin({ left: 12 })
 
-        Text(this.tokenUsage)
+        Text(this.tokenUsageText)
           .fontSize(12)
-          .fontColor('#52c41a')
+          .fontColor(this.tokenTotal > this.tokenLimit * 0.8 ? '#ff4d4f' : '#52c41a')
           .padding({ left: 8, right: 8, top: 4, bottom: 4 })
           .borderRadius(12)
           .backgroundColor('#f6ffed')
@@ -239,17 +352,33 @@ struct ChatPage {
       .padding({ left: 16, right: 16, top: 12, bottom: 12 })
       .backgroundColor('#ffffff')
 
-      List() {
-        ForEach(this.messages, (message: Message) => {
-          ListItem() {
-            MessageBubble({ message: message })
-          }
-        }, (message: Message) => message.id)
+      if (this.loadingHistory) {
+        Column() {
+          LoadingProgress()
+            .width(32)
+            .height(32)
+            .color('#999999')
+          Text('加载历史消息...')
+            .fontSize(13)
+            .fontColor('#999999')
+            .margin({ top: 8 })
+        }
+        .width('100%')
+        .layoutWeight(1)
+        .justifyContent(FlexAlign.Center)
+      } else {
+        List({ scroller: this.scroller }) {
+          ForEach(this.messages, (message: Message) => {
+            ListItem() {
+              MessageBubble({ message: message })
+            }
+          }, (message: Message) => message.id)
+        }
+        .width('100%')
+        .layoutWeight(1)
+        .padding({ left: 16, right: 16 })
+        .scrollBar(BarState.Off)
       }
-      .width('100%')
-      .layoutWeight(1)
-      .padding({ left: 16, right: 16 })
-      .scrollBar(BarState.Off)
 
       Row() {
         Button({ type: ButtonType.Circle }) {
@@ -292,35 +421,28 @@ struct ChatPage {
   }
 
   showSessionSwitcher() {
-    const sessionNames = this.sessions.map((s: Session) => s.name);
-    const buttons: [promptAction.Button] = [{ text: '+ 新建会话', color: '#52c41a' }];
-    
-    if (sessionNames.length > 0) {
-      buttons.unshift({ text: sessionNames[0], color: '#000000' });
+    const count = Math.min(this.sessions.length, 5);
+    const buttons: promptAction.Button[] = [];
+    for (let i = 0; i < count; i++) {
+      buttons.push({ text: this.sessions[i].name, color: '#000000' });
     }
-    if (sessionNames.length > 1) {
-      buttons.splice(1, 0, { text: sessionNames[1], color: '#000000' });
-    }
-    if (sessionNames.length > 2) {
-      buttons.splice(2, 0, { text: sessionNames[2], color: '#000000' });
-    }
-    if (sessionNames.length > 3) {
-      buttons.splice(3, 0, { text: sessionNames[3], color: '#000000' });
-    }
-    if (sessionNames.length > 4) {
-      buttons.splice(4, 0, { text: sessionNames[4], color: '#000000' });
-    }
-    
-    const sessionCount = this.sessions.length;
+    buttons.push({ text: '+ 新建会话', color: '#52c41a' });
+
+    const b1 = buttons[0];
+    const b2 = buttons.length > 1 ? buttons[1] : undefined;
+    const b3 = buttons.length > 2 ? buttons[2] : undefined;
+    const b4 = buttons.length > 3 ? buttons[3] : undefined;
+    const b5 = buttons.length > 4 ? buttons[4] : undefined;
+    const b6 = buttons.length > 5 ? buttons[5] : undefined;
+
     promptAction.showActionMenu({
       title: '切换会话',
-      buttons: buttons
+      buttons: [b1, b2, b3, b4, b5, b6] as [promptAction.Button, promptAction.Button?, promptAction.Button?, promptAction.Button?, promptAction.Button?, promptAction.Button?]
     }).then((result: promptAction.ActionMenuSuccessResponse) => {
-      const index = result.index;
-      if (index === sessionCount) {
+      if (result.index === count) {
         this.createSession();
-      } else if (index < sessionCount) {
-        this.switchSession(this.sessions[index].id);
+      } else if (result.index < count) {
+        this.switchSession(this.sessions[result.index].id);
       }
     });
   }
@@ -331,7 +453,7 @@ struct ChatPage {
       buttons: [
         { text: '代码审查', color: '#000000' },
         { text: '新建会话', color: '#52c41a' }
-      ]
+      ] as [promptAction.Button, promptAction.Button, promptAction.Button?, promptAction.Button?, promptAction.Button?, promptAction.Button?]
     }).then((result: promptAction.ActionMenuSuccessResponse) => {
       if (result.index === 0) {
         this.openReviewPage();

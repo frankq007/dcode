@@ -299,19 +299,19 @@ export class RelayClient {
     switch (part.type) {
       case 'reasoning':
         this.sendEncryptedMessage({
-          type: 'thinking', id: part.id,
+          type: 'thinking', id: part.id, stream: 'end',
           data: { content: part.text || '' }, timestamp: Date.now()
         });
         break;
       case 'text':
         this.sendEncryptedMessage({
-          type: 'reply', id: part.id,
+          type: 'reply', id: part.id, stream: 'end',
           data: { content: part.text || '' }, timestamp: Date.now()
         });
         break;
       case 'tool':
         this.sendEncryptedMessage({
-          type: 'tool_call', id: part.id,
+          type: 'tool_call', id: part.id, stream: 'end',
           data: { toolName: part.toolName || 'unknown', parameters: part.input || {}, result: part.output || '' },
           timestamp: Date.now()
         });
