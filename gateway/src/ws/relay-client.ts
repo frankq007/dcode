@@ -95,31 +95,45 @@ export class RelayClient {
   private handleHandshakeMessage(msg: any): void {
     if (this.handshakeState === 'waiting' && msg.type === 'handshake_init') {
       console.log(`[Relay] Handshake step 1: received app public key, version=${msg.version}`);
-      
+
+      if (msg.token !== this.token) {
+        console.warn('[Relay] Invalid token, rejecting');
+        this.ws?.send(JSON.stringify({ type: 'error', data: { code: 'INVALID_TOKEN', message: 'Token invalid' } }));
+        return;
+      }
+
       const gatewayNonce = randomBytes(16).toString('base64');
-      
+
+      (this as any)._appNonce = msg.nonce;
+      (this as any)._appPublicKey = msg.publicKey;
+      (this as any)._gatewayNonce = gatewayNonce;
+
+      this.crypto.deriveSessionKey(msg.publicKey, msg.nonce, gatewayNonce);
+
+      const verify = this.crypto.createHandshakeVerify(msg.nonce, gatewayNonce, true);
+
       const ack: HandshakeMessage = {
         type: 'handshake_ack',
         publicKey: this.crypto.getPublicKeyBase64(),
         nonce: gatewayNonce,
-        version: this.config.version
+        version: this.config.version,
+        verify
       };
-      
+
       this.ws?.send(JSON.stringify(ack));
       this.handshakeState = 'step1';
-      
-      (this as any)._appNonce = msg.nonce;
-      (this as any)._appPublicKey = msg.publicKey;
-      (this as any)._gatewayNonce = gatewayNonce;
     } else if (this.handshakeState === 'step1' && msg.type === 'handshake_complete') {
       const appNonce = (this as any)._appNonce;
       const gatewayNonce = (this as any)._gatewayNonce;
-      const appPublicKey = (this as any)._appPublicKey;
 
-      this.crypto.deriveSessionKey(appPublicKey, appNonce, gatewayNonce);
+      if (!msg.verify || !this.crypto.verifyHandshake(msg.verify, appNonce, gatewayNonce, false)) {
+        console.warn('[Relay] Handshake verify failed');
+        this.ws?.send(JSON.stringify({ type: 'error', data: { code: 'HANDSHAKE_FAILED', message: 'Key verification failed' } }));
+        return;
+      }
+
       this.handshakeState = 'complete';
-
-      console.log('[Relay] Handshake complete: session key derived');
+      console.log('[Relay] Handshake complete: session key verified');
 
       this.initializeFirstSession().catch((e: any) => {
         console.error('[Relay] Session initialization failed:', e.message);

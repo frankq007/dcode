@@ -94,31 +94,47 @@ export class DirectServer {
   private handleHandshake(ws: WebSocket, msg: HandshakeMessage): void {
     if (this.handshakeState === 'waiting' && msg.type === 'handshake_init') {
       console.log(`[Direct] Handshake step 1: received app public key, version=${msg.version}`);
-      
+
+      if (msg.token !== this.token) {
+        console.warn('[Direct] Invalid token, rejecting connection');
+        ws.send(JSON.stringify({ type: 'error', data: { code: 'INVALID_TOKEN', message: 'Token invalid' } }));
+        ws.close();
+        return;
+      }
+
       const gatewayNonce = randomBytes(16).toString('base64');
-      
+
+      (ws as any)._appNonce = msg.nonce;
+      (ws as any)._appPublicKey = msg.publicKey;
+      (ws as any)._gatewayNonce = gatewayNonce;
+
+      this.crypto.deriveSessionKey(msg.publicKey, msg.nonce, gatewayNonce);
+
+      const verify = this.crypto.createHandshakeVerify(msg.nonce, gatewayNonce, true);
+
       const ack: HandshakeMessage = {
         type: 'handshake_ack',
         publicKey: this.crypto.getPublicKeyBase64(),
         nonce: gatewayNonce,
-        version: this.config.version
+        version: this.config.version,
+        verify
       };
-      
+
       ws.send(JSON.stringify(ack));
       this.handshakeState = 'step1';
-      
-      (ws as any)._appNonce = msg.nonce;
-      (ws as any)._appPublicKey = msg.publicKey;
-      (ws as any)._gatewayNonce = gatewayNonce;
     } else if (this.handshakeState === 'step1' && msg.type === 'handshake_complete') {
       const appNonce = (ws as any)._appNonce;
       const gatewayNonce = (ws as any)._gatewayNonce;
-      const appPublicKey = (ws as any)._appPublicKey;
 
-      this.crypto.deriveSessionKey(appPublicKey, appNonce, gatewayNonce);
+      if (!msg.verify || !this.crypto.verifyHandshake(msg.verify, appNonce, gatewayNonce, false)) {
+        console.warn('[Direct] Handshake verify failed');
+        ws.send(JSON.stringify({ type: 'error', data: { code: 'HANDSHAKE_FAILED', message: 'Key verification failed' } }));
+        ws.close();
+        return;
+      }
+
       this.handshakeState = 'complete';
-
-      console.log('[Direct] Handshake complete: session key derived');
+      console.log('[Direct] Handshake complete: session key verified');
 
       this.initializeFirstSession().catch((e: any) => {
         console.error('[Direct] Session initialization failed:', e.message);

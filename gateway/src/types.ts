@@ -35,7 +35,7 @@ export interface HandshakeMessage {
   nonce: string;
   token?: string;
   version: string;
-  verify?: string;
+  verify?: { iv: string; ciphertext: string };
 }
 
 export interface QRCodeData {
