@@ -493,10 +493,11 @@ export class DirectServer {
       }
       case 'message.part.updated': {
         if (!stream) break;
+        if (!stream.assistantMsgId) break;
         const part = props.part as OpencodePart;
         if (!part) break;
         if (part.sessionID && part.sessionID !== stream.sessionId) break;
-        if (stream.assistantMsgId && part.messageID !== stream.assistantMsgId) break;
+        if (part.messageID !== stream.assistantMsgId) break;
         this.handlePartUpdated(part);
         break;
       }
