@@ -32,7 +32,7 @@ export struct MessageBubble {
 
   private isFinished(): boolean {
     const s = this.message.stream;
-    return s === undefined || s === null || s === 'end' || s === 'aborted' || s === 'replace';
+    return s === undefined || s === null || s === 'end' || s === 'aborted';
   }
 
   @Builder
