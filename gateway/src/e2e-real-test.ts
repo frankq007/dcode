@@ -102,9 +102,6 @@ async function main() {
       }
       if (parsed.type === 'reply' && parsed.stream === 'end') {
         console.log('[9] reply stream=end - SSE flow complete');
-      }
-      if (parsed.type === 'thinking' && parsed.stream === 'end' && checks['reply']) {
-        // Final: thinking end after reply end = complete
         const replyStart = replyStreams.includes('start');
         const replyEnd = replyStreams.includes('end');
         const all = ['Token','ECDH+HKDF','GwVerify','AES','sessions','history','ack','thinking','reply','tokens'];

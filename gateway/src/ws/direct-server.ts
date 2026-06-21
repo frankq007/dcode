@@ -30,6 +30,7 @@ export class DirectServer {
     sessionId: string;
     thinkingId: string;
     thinkingText: string;
+    thinkingEnded: boolean;
     replyPartId: string;
     replyStarted: boolean;
     assistantMsgId: string | null;
@@ -177,6 +178,7 @@ export class DirectServer {
 
       if (this.sessionInitDone) {
         console.log('[Direct] Reconnect detected, skipping session init');
+        this.startSseSubscription();
         if (this.pendingSyncSeq >= 0) {
           console.log(`[Direct] Processing pending sync (lastSeq=${this.pendingSyncSeq})`);
           this.processSync(this.pendingSyncSeq).catch((e: any) => {
@@ -419,6 +421,7 @@ export class DirectServer {
         sessionId: session.id,
         thinkingId,
         thinkingText: '',
+        thinkingEnded: false,
         replyPartId: '',
         replyStarted: false,
         assistantMsgId: null
@@ -477,15 +480,29 @@ export class DirectServer {
     const stream = this.activeStream;
 
     switch (event.type) {
+      case 'message.updated': {
+        if (!stream) break;
+        if (props.sessionID && props.sessionID !== stream.sessionId) break;
+        const info = props.info;
+        if (info && info.role === 'assistant' && info.id) {
+          stream.assistantMsgId = info.id;
+          console.log(`[Direct] SSE: assistant message ${info.id}`);
+        }
+        break;
+      }
       case 'message.part.updated': {
+        if (!stream) break;
         const part = props.part as OpencodePart;
         if (!part) break;
-        this.handlePartUpdated(part, props.messageID || part.messageID);
+        if (part.sessionID && part.sessionID !== stream.sessionId) break;
+        if (stream.assistantMsgId && part.messageID !== stream.assistantMsgId) break;
+        this.handlePartUpdated(part);
         break;
       }
       case 'message.part.delta': {
         if (!stream) break;
         if (props.sessionID && props.sessionID !== stream.sessionId) break;
+        if (stream.assistantMsgId && props.messageID !== stream.assistantMsgId) break;
         this.handlePartDelta(props);
         break;
       }
@@ -500,10 +517,9 @@ export class DirectServer {
     }
   }
 
-  private handlePartUpdated(part: OpencodePart, assistantMsgId: string): void {
+  private handlePartUpdated(part: OpencodePart): void {
     const stream = this.activeStream;
     if (!stream) return;
-    if (part.sessionID && part.sessionID !== stream.sessionId) return;
 
     switch (part.type) {
       case 'reasoning': {
@@ -520,6 +536,13 @@ export class DirectServer {
       case 'text': {
         const text = part.text || '';
         if (!stream.replyPartId) {
+          if (!stream.thinkingEnded) {
+            this.sendEncryptedMessage({
+              type: 'thinking', id: stream.thinkingId, stream: 'end',
+              data: { content: stream.thinkingText || '' }, timestamp: Date.now()
+            });
+            stream.thinkingEnded = true;
+          }
           stream.replyPartId = part.id;
           stream.replyStarted = true;
           this.sendEncryptedMessage({
@@ -604,10 +627,13 @@ export class DirectServer {
       stream.replyStarted = false;
     }
 
-    this.sendEncryptedMessage({
-      type: 'thinking', id: stream.thinkingId, stream: 'end',
-      data: { content: '' }, timestamp: Date.now()
-    });
+    if (!stream.thinkingEnded) {
+      this.sendEncryptedMessage({
+        type: 'thinking', id: stream.thinkingId, stream: 'end',
+        data: { content: stream.thinkingText || '' }, timestamp: Date.now()
+      });
+      stream.thinkingEnded = true;
+    }
 
     const resolve = this.streamResolve;
     this.streamResolve = null;
