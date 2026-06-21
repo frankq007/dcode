@@ -1,6 +1,7 @@
 ﻿import { Connection } from '../models/index';
 import { connectionService } from '../services/ConnectionService';
 import router from '@ohos.router';
+import { WX } from '../theme/WXTheme';
 
 @Component
 export struct ConnectionListItem {
@@ -10,44 +11,45 @@ export struct ConnectionListItem {
 
   build() {
     Row() {
-      // Status indicator
-      Circle({ width: 12, height: 12 })
-        .fill(this.connection.isOnline ? '#52c41a' : '#d9d9d9')
+      Circle({ width: 10, height: 10 })
+        .fill(this.connection.isOnline ? WX.GREEN : WX.TEXT_HINT)
         .margin({ left: 16, right: 12 })
 
-      // Connection info
       Column() {
         Text(this.connection.name)
-          .fontSize(16)
+          .fontSize(WX.FONT_BODY)
           .fontWeight(FontWeight.Medium)
-          .fontColor('#333333')
-        
-        Text(`${this.connection.mode === 'direct' ? '直连' : '云转发'} - ${this.connection.host}:${this.connection.port}`)
-          .fontSize(12)
-          .fontColor('#999999')
+          .fontColor(WX.TEXT)
+
+        Text(`${this.connection.mode === 'direct' ? '直连' : '云转发'} · ${this.connection.host}:${this.connection.port}`)
+          .fontSize(WX.FONT_SMALL)
+          .fontColor(WX.TEXT_SUB)
           .margin({ top: 4 })
       }
       .alignItems(HorizontalAlign.Start)
       .layoutWeight(1)
 
-      // Action buttons
       Row() {
-        Button('连接')
-          .fontSize(12)
-          .height(32)
+        Button('连接', { type: ButtonType.Normal })
+          .fontSize(WX.FONT_SMALL)
+          .height(30)
+          .fontColor(WX.WHITE)
+          .backgroundColor(WX.GREEN)
+          .borderRadius(WX.RADIUS_SM)
           .onClick(() => {
             router.pushUrl({
               url: 'pages/ChatPage',
               params: { connectionId: this.connection.id }
             });
           })
-        
-        Button('删除')
-          .fontSize(12)
-          .height(32)
-          .type(ButtonType.Normal)
-          .backgroundColor('#ff4d4f')
+
+        Button('删除', { type: ButtonType.Normal })
+          .fontSize(WX.FONT_SMALL)
+          .height(30)
           .margin({ left: 8 })
+          .fontColor(WX.DANGER)
+          .backgroundColor(WX.GRAY_LIGHT)
+          .borderRadius(WX.RADIUS_SM)
           .onClick(() => {
             this.deleteConnection();
           })
@@ -56,7 +58,7 @@ export struct ConnectionListItem {
     }
     .width('100%')
     .height(72)
-    .backgroundColor('#ffffff')
+    .backgroundColor(WX.WHITE)
     .onClick(() => {
       router.pushUrl({
         url: 'pages/ChatPage',

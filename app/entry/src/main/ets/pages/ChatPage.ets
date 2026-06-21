@@ -6,6 +6,7 @@ import { MessageBubble } from '../components/MessageBubble';
 import { SessionListSheet } from '../components/SessionListSheet';
 import router from '@ohos.router';
 import { promptAction } from '@kit.ArkUI';
+import { WX } from '../theme/WXTheme';
 
 interface ChatPageParams {
   connectionId?: string;
@@ -448,9 +449,11 @@ struct ChatPage {
       Button({ type: ButtonType.Circle }) {
         Text('\u2190')
           .fontSize(20)
+          .fontColor(WX.TEXT)
       }
       .width(40)
       .height(40)
+      .backgroundColor(WX.GREEN_BG)
       .onClick(() => {
         webSocketService.disconnect();
         router.back();
@@ -458,8 +461,9 @@ struct ChatPage {
 
       Column() {
         Text(this.currentSession?.name || '加载中...')
-          .fontSize(16)
+          .fontSize(WX.FONT_TITLE)
           .fontWeight(FontWeight.Bold)
+          .fontColor(WX.TEXT)
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
           .onClick(() => {
@@ -468,12 +472,12 @@ struct ChatPage {
 
         Row() {
           Circle({ width: 8, height: 8 })
-            .fill(this.isConnected ? '#52c41a' : '#ff4d4f')
+            .fill(this.isConnected ? WX.GREEN : WX.DANGER)
             .margin({ right: 4 })
 
           Text(this.isConnected ? '已连接' : '未连接')
-            .fontSize(11)
-            .fontColor('#999999')
+            .fontSize(WX.FONT_TINY)
+            .fontColor(WX.TEXT_SUB)
         }
         .margin({ top: 2 })
       }
@@ -482,18 +486,20 @@ struct ChatPage {
       .margin({ left: 12 })
 
       Text(this.tokenUsageText)
-        .fontSize(12)
-        .fontColor(this.tokenTotal > this.tokenLimit * 0.8 ? '#ff4d4f' : '#52c41a')
+        .fontSize(WX.FONT_SMALL)
+        .fontColor(this.tokenTotal > this.tokenLimit * 0.8 ? WX.DANGER : WX.GREEN)
         .padding({ left: 8, right: 8, top: 4, bottom: 4 })
-        .borderRadius(12)
-        .backgroundColor('#f6ffed')
+        .borderRadius(WX.RADIUS_SM)
+        .backgroundColor(WX.GRAY_LIGHT)
 
       Button({ type: ButtonType.Normal }) {
         Text('\u22ee')
           .fontSize(20)
+          .fontColor(WX.TEXT)
       }
       .width(40)
       .height(40)
+      .backgroundColor(WX.GREEN_BG)
       .onClick(() => {
         this.showMenu();
       })
@@ -501,7 +507,7 @@ struct ChatPage {
     .width('100%')
     .height(56)
     .padding({ left: 12, right: 12 })
-    .backgroundColor('#ffffff')
+    .backgroundColor(WX.GREEN_BG)
   }
 
   @Builder
@@ -553,7 +559,7 @@ struct ChatPage {
       }
       .width(40)
       .height(40)
-      .backgroundColor(this.isRecording ? '#ff4d4f' : '#f0f0f0')
+      .backgroundColor(this.isRecording ? WX.DANGER : WX.GRAY_LIGHT)
       .onClick(() => {
         this.toggleVoiceInput();
       })
@@ -562,8 +568,8 @@ struct ChatPage {
         .layoutWeight(1)
         .margin({ left: 8, right: 8 })
         .height(40)
-        .borderRadius(20)
-        .backgroundColor('#f5f5f5')
+        .borderRadius(WX.RADIUS_SM)
+        .backgroundColor(WX.WHITE)
         .onChange((value: string) => {
           this.inputText = value;
         })
@@ -576,14 +582,18 @@ struct ChatPage {
 
       Button('发送')
         .height(40)
-        .fontSize(14)
+        .fontSize(WX.FONT_CAPTION)
+        .type(ButtonType.Normal)
+        .backgroundColor(WX.GREEN)
+        .fontColor(WX.WHITE)
+        .borderRadius(WX.RADIUS_SM)
         .onClick(() => {
           this.sendMessage();
         })
     }
     .width('100%')
     .padding({ left: 12, right: 12, top: 8, bottom: 8 })
-    .backgroundColor('#ffffff')
+    .backgroundColor(WX.GREEN_INPUT)
   }
 
   build() {
@@ -617,7 +627,7 @@ struct ChatPage {
     }
     .width('100%')
     .height('100%')
-    .backgroundColor('#ededed')
+    .backgroundColor(WX.GREEN_BG)
   }
 
   showMenu() {

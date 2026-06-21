@@ -2,6 +2,7 @@ import { Message, MessageData, ToolCallItem } from '../models/index';
 import { webSocketService } from '../services/WebSocketService';
 import { Markdown } from '@luvi/lv-markdown-in';
 import { MermaidDiagram } from './MermaidDiagram';
+import { WX } from '../theme/WXTheme';
 
 @Component
 export struct MessageBubble {
@@ -41,15 +42,15 @@ export struct MessageBubble {
       Blank()
       Column() {
         Text(this.message.data.content || '')
-          .fontSize(15)
-          .fontColor('#000000')
+          .fontSize(WX.FONT_BODY)
+          .fontColor(WX.TEXT)
           .textAlign(TextAlign.Start)
           .constraintSize({ maxWidth: '100%' })
       }
-      .constraintSize({ maxWidth: '80%' })
-      .padding({ left: 12, right: 12, top: 10, bottom: 10 })
-      .backgroundColor('#95EC69')
-      .borderRadius(12)
+      .constraintSize({ maxWidth: '75%' })
+      .padding({ left: 12, right: 12, top: 9, bottom: 9 })
+      .backgroundColor(WX.GREEN_LIGHT)
+      .borderRadius(WX.RADIUS_SM)
       .clip(true)
     }
     .width('100%')
@@ -65,18 +66,18 @@ export struct MessageBubble {
             LoadingProgress()
               .width(12)
               .height(12)
-              .color('#1890ff')
+              .color(WX.GREEN)
           }
-          Text(this.isStreaming() ? '执行中' : '思考过程')
-            .fontSize(12)
-            .fontColor(this.isStreaming() ? '#1890ff' : '#8c8c8c')
+          Text(this.isStreaming() ? '思考中' : '思考过程')
+            .fontSize(WX.FONT_CAPTION)
+            .fontColor(this.isStreaming() ? WX.GREEN : WX.TEXT_SUB)
             .fontWeight(FontWeight.Medium)
             .margin({ left: this.isStreaming() ? 6 : 0 })
           Blank()
           if (!this.isStreaming() && this.message.data.content) {
             Text(this.isThinkingExpanded ? '收起' : '展开')
-              .fontSize(11)
-              .fontColor('#1890ff')
+              .fontSize(WX.FONT_TINY)
+              .fontColor(WX.LINK)
               .onClick(() => {
                 this.isThinkingExpanded = !this.isThinkingExpanded;
               })
@@ -86,29 +87,29 @@ export struct MessageBubble {
 
         if (this.isStreaming()) {
           Text('正在等待 AI 响应...')
-            .fontSize(12)
-            .fontColor('#bfbfbf')
+            .fontSize(WX.FONT_SMALL)
+            .fontColor(WX.TEXT_HINT)
             .margin({ top: 4 })
         } else if (!this.isThinkingExpanded) {
           Text(this.thinkingPreview())
-            .fontSize(12)
-            .fontColor('#bfbfbf')
+            .fontSize(WX.FONT_SMALL)
+            .fontColor(WX.TEXT_HINT)
             .maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
             .constraintSize({ maxWidth: '100%' })
             .margin({ top: 4 })
         } else {
           Text(this.message.data.content || '(空)')
-            .fontSize(13)
-            .fontColor('#595959')
+            .fontSize(WX.FONT_SMALL)
+            .fontColor(WX.TEXT_SUB)
             .constraintSize({ maxWidth: '100%' })
             .margin({ top: 6 })
         }
       }
       .layoutWeight(1)
-      .padding({ left: 12, right: 12, top: 8, bottom: 8 })
-      .backgroundColor('#F5F5F5')
-      .borderRadius(12)
+      .padding({ left: 12, right: 12, top: 9, bottom: 9 })
+      .backgroundColor(WX.GRAY)
+      .borderRadius(WX.RADIUS_SM)
 
       Blank()
         .width(40)
@@ -167,21 +168,21 @@ export struct MessageBubble {
       Column() {
         Row() {
           Text('🔧')
-            .fontSize(14)
+            .fontSize(WX.FONT_CAPTION)
           Text(this.getToolList().length > 1
             ? `工具调用 (${this.getToolList().length})`
             : (this.message.data.toolName || this.message.data.name || '工具调用') as string)
-            .fontSize(13)
+            .fontSize(WX.FONT_CAPTION)
             .fontWeight(FontWeight.Medium)
-            .fontColor('#333333')
+            .fontColor(WX.TEXT)
             .maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
             .margin({ left: 4 })
             .layoutWeight(1)
           if (this.hasAnyResult()) {
             Text(this.isToolExpanded ? '收起' : '详情')
-              .fontSize(11)
-              .fontColor('#1890ff')
+              .fontSize(WX.FONT_TINY)
+              .fontColor(WX.LINK)
               .onClick(() => {
                 this.isToolExpanded = !this.isToolExpanded;
               })
@@ -193,21 +194,21 @@ export struct MessageBubble {
           Column() {
             if (index > 0) {
               Divider()
-                .color('#e0e0e0')
+                .color(WX.DIVIDER)
                 .margin({ top: 6, bottom: 4 })
             }
             Row() {
               Text(tool.toolName || 'unknown')
-                .fontSize(12)
-                .fontColor('#666666')
+                .fontSize(WX.FONT_SMALL)
+                .fontColor(WX.TEXT_SUB)
                 .layoutWeight(1)
             }
             .width('100%')
 
             if (this.hasToolParameters(tool)) {
                 Text(`参数: ${JSON.stringify(tool.parameters)}`)
-                  .fontSize(11)
-                  .fontColor('#999999')
+                  .fontSize(WX.FONT_TINY)
+                  .fontColor(WX.TEXT_HINT)
                   .margin({ top: 2 })
                   .maxLines(this.isToolExpanded ? undefined : 2)
                   .textOverflow({ overflow: TextOverflow.Ellipsis })
@@ -216,8 +217,8 @@ export struct MessageBubble {
 
             if (tool.result && this.isToolExpanded) {
               Text(`结果: ${tool.result}`)
-                .fontSize(11)
-                .fontColor('#666666')
+                .fontSize(WX.FONT_TINY)
+                .fontColor(WX.TEXT_SUB)
                 .margin({ top: 2 })
                 .width('100%')
             }
@@ -226,9 +227,9 @@ export struct MessageBubble {
         }, (tool: ToolCallItem, index: number) => `${tool.toolName}_${index}`)
       }
       .layoutWeight(1)
-      .padding({ left: 12, right: 12, top: 10, bottom: 10 })
-      .backgroundColor('#E8F5E9')
-      .borderRadius(12)
+      .padding({ left: 12, right: 12, top: 9, bottom: 9 })
+      .backgroundColor(WX.GRAY)
+      .borderRadius(WX.RADIUS_SM)
       .clip(true)
 
       Blank()
@@ -243,33 +244,39 @@ export struct MessageBubble {
     Row() {
       Column() {
         Text('权限请求')
-          .fontSize(13)
+          .fontSize(WX.FONT_CAPTION)
           .fontWeight(FontWeight.Bold)
-          .fontColor('#333333')
+          .fontColor(WX.TEXT)
           .width('100%')
 
         Text(this.message.data.description || '')
-          .fontSize(12)
-          .fontColor('#666666')
+          .fontSize(WX.FONT_SMALL)
+          .fontColor(WX.TEXT_SUB)
           .margin({ top: 6 })
           .width('100%')
 
         Row() {
           Button('允许')
             .height(32)
-            .fontSize(12)
+            .fontSize(WX.FONT_SMALL)
             .layoutWeight(1)
+            .type(ButtonType.Normal)
+            .backgroundColor(WX.GREEN)
+            .fontColor(WX.WHITE)
+            .borderRadius(WX.RADIUS_SM)
             .onClick(() => {
               this.handlePermissionReply(true);
             })
 
           Button('拒绝')
             .height(32)
-            .fontSize(12)
+            .fontSize(WX.FONT_SMALL)
             .layoutWeight(1)
             .margin({ left: 8 })
             .type(ButtonType.Normal)
-            .backgroundColor('#ff4d4f')
+            .backgroundColor(WX.DANGER)
+            .fontColor(WX.WHITE)
+            .borderRadius(WX.RADIUS_SM)
             .onClick(() => {
               this.handlePermissionReply(false);
             })
@@ -277,10 +284,10 @@ export struct MessageBubble {
         .width('100%')
         .margin({ top: 10 })
       }
-      .constraintSize({ maxWidth: '80%' })
-      .padding({ left: 16, right: 16, top: 10, bottom: 10 })
-      .backgroundColor('#FFF3E0')
-      .borderRadius(12)
+      .constraintSize({ maxWidth: '75%' })
+      .padding({ left: 14, right: 14, top: 10, bottom: 10 })
+      .backgroundColor(WX.WARNING_BG)
+      .borderRadius(WX.RADIUS_SM)
       .clip(true)
 
       Blank()
@@ -300,8 +307,8 @@ export struct MessageBubble {
 
         if (this.isStreaming()) {
           Text(this.message.data.content || '')
-            .fontSize(14)
-            .fontColor('#262626')
+            .fontSize(WX.FONT_BODY)
+            .fontColor(WX.TEXT)
             .width('100%')
             .lineHeight(22)
 
@@ -309,10 +316,10 @@ export struct MessageBubble {
             LoadingProgress()
               .width(12)
               .height(12)
-              .color('#1890ff')
+              .color(WX.GREEN)
             Text('正在输入')
-              .fontSize(11)
-              .fontColor('#bfbfbf')
+              .fontSize(WX.FONT_TINY)
+              .fontColor(WX.TEXT_HINT)
               .margin({ left: 4 })
           }
           .margin({ top: 6 })
@@ -321,9 +328,9 @@ export struct MessageBubble {
         }
       }
       .layoutWeight(1)
-      .padding({ left: 12, right: 12, top: 10, bottom: 10 })
-      .backgroundColor('#FFFFFF')
-      .borderRadius(12)
+      .padding({ left: 12, right: 12, top: 9, bottom: 9 })
+      .backgroundColor(WX.WHITE)
+      .borderRadius(WX.RADIUS_SM)
 
       Blank()
         .width(40)
@@ -336,8 +343,8 @@ export struct MessageBubble {
   DefaultMessage() {
     Row() {
       Text('[未知消息]')
-        .fontSize(12)
-        .fontColor('#999999')
+        .fontSize(WX.FONT_SMALL)
+        .fontColor(WX.TEXT_HINT)
         .padding(8)
       Blank()
     }

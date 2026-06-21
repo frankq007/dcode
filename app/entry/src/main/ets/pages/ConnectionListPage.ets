@@ -3,6 +3,7 @@ import { connectionService } from '../services/ConnectionService';
 import { ConnectionListItem } from '../components/ConnectionListItem';
 import router from '@ohos.router';
 import { promptAction } from '@kit.ArkUI';
+import { WX } from '../theme/WXTheme';
 
 @Entry
 @Component
@@ -28,67 +29,82 @@ struct ConnectionListPage {
 
   build() {
     Column() {
-      // Header
       Row() {
-        Text('连接列表')
-          .fontSize(24)
+        Text('连接')
+          .fontSize(WX.FONT_TITLE)
           .fontWeight(FontWeight.Bold)
-        
+          .fontColor(WX.TEXT)
+
         Blank()
-        
-        // Action buttons
+
         Row() {
           Button('手动', { type: ButtonType.Normal })
-            .fontSize(13)
+            .fontSize(WX.FONT_SMALL)
             .height(32)
+            .fontColor(WX.TEXT)
+            .backgroundColor(WX.GRAY_LIGHT)
+            .borderRadius(WX.RADIUS_SM)
             .onClick(() => {
               router.pushUrl({ url: 'pages/ManualConnectionPage' });
             })
-          
-          Button('扫一扫', { type: ButtonType.Capsule })
-            .fontSize(13)
+
+          Button('扫一扫', { type: ButtonType.Normal })
+            .fontSize(WX.FONT_SMALL)
             .height(32)
             .margin({ left: 8 })
+            .fontColor(WX.WHITE)
+            .backgroundColor(WX.GREEN)
+            .borderRadius(WX.RADIUS_SM)
             .onClick(() => {
               router.pushUrl({ url: 'pages/QRScannerPage' });
             })
         }
       }
       .width('100%')
-      .padding(16)
-      .backgroundColor('#ffffff')
+      .padding({ left: 16, right: 16, top: 12, bottom: 12 })
+      .backgroundColor(WX.GREEN_BG)
 
-      // Connection list
       if (this.connections.length === 0) {
         Column() {
           Text('暂无连接')
-            .fontSize(16)
-            .fontColor('#999999')
+            .fontSize(WX.FONT_BODY)
+            .fontColor(WX.TEXT_HINT)
             .margin({ top: 100 })
-          
+
           Text('扫描 Gateway 生成的二维码或手动输入连接信息')
-            .fontSize(13)
-            .fontColor('#bbbbbb')
+            .fontSize(WX.FONT_CAPTION)
+            .fontColor(WX.TEXT_HINT)
             .margin({ top: 8 })
-          
+
           Row() {
             Button('扫一扫', { type: ButtonType.Normal })
               .height(40)
+              .fontSize(WX.FONT_CAPTION)
+              .fontColor(WX.WHITE)
+              .backgroundColor(WX.GREEN)
+              .borderRadius(WX.RADIUS_SM)
               .onClick(() => {
                 router.pushUrl({ url: 'pages/QRScannerPage' });
               })
-            
-            Button('手动添加', { type: ButtonType.Capsule })
+
+            Button('手动添加', { type: ButtonType.Normal })
               .height(40)
+              .fontSize(WX.FONT_CAPTION)
               .margin({ left: 12 })
+              .fontColor(WX.TEXT)
+              .backgroundColor(WX.GRAY_LIGHT)
+              .borderRadius(WX.RADIUS_SM)
               .onClick(() => {
                 router.pushUrl({ url: 'pages/ManualConnectionPage' });
               })
 
-            Button('快速连接', { type: ButtonType.Capsule })
+            Button('快速连接', { type: ButtonType.Normal })
               .height(40)
+              .fontSize(WX.FONT_CAPTION)
               .margin({ left: 12 })
-              .backgroundColor('#52c41a')
+              .fontColor(WX.WHITE)
+              .backgroundColor(WX.GREEN)
+              .borderRadius(WX.RADIUS_SM)
               .onClick(() => {
                 const qrData: string = '{"mode":"direct","name":"MyPC","host":"10.0.2.2","port":8765,"publicKey":"p4j4BBNcGKp4Q6ogSGwpWzlBAZaKM3y8i/cB5Qto8Dg=","token":"dcode-dev-token-0001"}';
                 router.pushUrl({ url: 'pages/ChatPage', params: { qrData: qrData } });
@@ -115,7 +131,7 @@ struct ConnectionListPage {
           }
           .width('100%')
           .layoutWeight(1)
-          .divider({ strokeWidth: 1, color: '#f0f0f0' })
+          .divider({ strokeWidth: 0.5, color: WX.DIVIDER })
         }
         .onRefreshing(() => {
           this.loadConnections();
@@ -124,6 +140,6 @@ struct ConnectionListPage {
     }
     .width('100%')
     .height('100%')
-    .backgroundColor('#f5f5f5')
+    .backgroundColor(WX.GREEN_BG)
   }
 }

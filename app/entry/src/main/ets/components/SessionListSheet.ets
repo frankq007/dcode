@@ -1,4 +1,5 @@
 import { Session } from '../models/index';
+import { WX } from '../theme/WXTheme';
 
 @Component
 export struct SessionListSheet {
@@ -29,8 +30,8 @@ export struct SessionListSheet {
       }
       .width('100%')
       .height('75%')
-      .backgroundColor('#ffffff')
-      .borderRadius({ topLeft: 16, topRight: 16 })
+      .backgroundColor(WX.WHITE)
+      .borderRadius({ topLeft: WX.RADIUS_LG, topRight: WX.RADIUS_LG })
     }
     .width('100%')
     .height('100%')
@@ -40,17 +41,19 @@ export struct SessionListSheet {
   SheetHeader() {
     Row() {
       Text('会话列表')
-        .fontSize(18)
+        .fontSize(WX.FONT_TITLE)
         .fontWeight(FontWeight.Bold)
-        .fontColor('#333333')
+        .fontColor(WX.TEXT)
 
       Blank()
 
       Button(this.deleteMode ? '完成' : '管理')
         .type(ButtonType.Normal)
-        .height(32)
-        .fontSize(13)
-        .fontColor(this.deleteMode ? '#1890ff' : '#666666')
+        .height(30)
+        .fontSize(WX.FONT_SMALL)
+        .fontColor(this.deleteMode ? WX.GREEN : WX.TEXT_SUB)
+        .backgroundColor(this.deleteMode ? WX.GRAY_LIGHT : WX.GRAY)
+        .borderRadius(WX.RADIUS_SM)
         .onClick(() => {
           this.deleteMode = !this.deleteMode;
         })
@@ -58,11 +61,12 @@ export struct SessionListSheet {
       Button({ type: ButtonType.Circle }) {
         Text('\u2715')
           .fontSize(16)
-          .fontColor('#999999')
+          .fontColor(WX.TEXT_SUB)
       }
       .width(32)
       .height(32)
       .margin({ left: 4 })
+      .backgroundColor(WX.GRAY)
       .onClick(() => {
         this.deleteMode = false;
         this.onClose();
@@ -77,11 +81,11 @@ export struct SessionListSheet {
     if (this.sessions.length === 0) {
       Column() {
         Text('暂无会话')
-          .fontSize(14)
-          .fontColor('#999999')
+          .fontSize(WX.FONT_CAPTION)
+          .fontColor(WX.TEXT_SUB)
         Text('点击下方按钮新建会话')
-          .fontSize(12)
-          .fontColor('#bbbbbb')
+          .fontSize(WX.FONT_SMALL)
+          .fontColor(WX.TEXT_HINT)
           .margin({ top: 4 })
       }
       .width('100%')
@@ -97,7 +101,7 @@ export struct SessionListSheet {
       }
       .width('100%')
       .layoutWeight(1)
-      .divider({ strokeWidth: 1, color: '#f0f0f0', startMargin: 16, endMargin: 16 })
+      .divider({ strokeWidth: 0.5, color: WX.DIVIDER, startMargin: 16, endMargin: 16 })
       .scrollBar(BarState.Auto)
     }
   }
@@ -107,8 +111,8 @@ export struct SessionListSheet {
     Row() {
       Column() {
         Text(session.name || session.id.substring(0, 8))
-          .fontSize(15)
-          .fontColor(session.id === this.currentSessionId ? '#1890ff' : '#333333')
+          .fontSize(WX.FONT_BODY)
+          .fontColor(session.id === this.currentSessionId ? WX.GREEN : WX.TEXT)
           .fontWeight(session.id === this.currentSessionId ? FontWeight.Bold : FontWeight.Normal)
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
@@ -116,8 +120,8 @@ export struct SessionListSheet {
 
         if (session.lastActivity > 0) {
           Text(this.formatTime(session.lastActivity))
-            .fontSize(11)
-            .fontColor('#999999')
+            .fontSize(WX.FONT_TINY)
+            .fontColor(WX.TEXT_SUB)
             .margin({ top: 4 })
         }
       }
@@ -125,22 +129,22 @@ export struct SessionListSheet {
       .layoutWeight(1)
 
       if (this.deleteMode) {
-        Button('删除')
-          .type(ButtonType.Normal)
-          .height(30)
-          .fontSize(12)
-          .fontColor('#ff4d4f')
-          .borderRadius(6)
+        Button('删除', { type: ButtonType.Normal })
+          .height(28)
+          .fontSize(WX.FONT_SMALL)
+          .fontColor(WX.WHITE)
+          .backgroundColor(WX.DANGER)
+          .borderRadius(WX.RADIUS_SM)
           .onClick(() => {
             this.onDeleteSession(session.id);
           })
       } else if (session.id === this.currentSessionId) {
         Text('当前')
-          .fontSize(11)
-          .fontColor('#1890ff')
+          .fontSize(WX.FONT_TINY)
+          .fontColor(WX.GREEN)
           .padding({ left: 8, right: 8, top: 2, bottom: 2 })
-          .borderRadius(8)
-          .backgroundColor('#e6f7ff')
+          .borderRadius(WX.RADIUS_SM)
+          .backgroundColor(WX.GRAY_LIGHT)
       }
     }
     .width('100%')
@@ -160,10 +164,10 @@ export struct SessionListSheet {
     Button('+ 新建会话')
       .width('90%')
       .height(44)
-      .fontSize(15)
-      .fontColor('#ffffff')
-      .backgroundColor('#52c41a')
-      .borderRadius(22)
+      .fontSize(WX.FONT_BODY)
+      .fontColor(WX.WHITE)
+      .backgroundColor(WX.GREEN)
+      .borderRadius(WX.RADIUS_SM)
       .margin({ top: 12, bottom: 16 })
       .onClick(() => {
         this.deleteMode = false;
