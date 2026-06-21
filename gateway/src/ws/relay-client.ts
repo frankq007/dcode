@@ -478,6 +478,7 @@ export class RelayClient {
 
     switch (part.type) {
       case 'reasoning': {
+        if (stream.thinkingEnded) break;
         const text = part.text || '';
         if (text && text !== stream.thinkingText) {
           stream.thinkingText = text;
@@ -491,13 +492,7 @@ export class RelayClient {
       case 'text': {
         const text = part.text || '';
         if (!stream.replyPartId) {
-          if (!stream.thinkingEnded) {
-            this.sendEncryptedMessage({
-              type: 'thinking', id: stream.thinkingId, stream: 'end',
-              data: { content: stream.thinkingText || '' }, timestamp: Date.now()
-            });
-            stream.thinkingEnded = true;
-          }
+          this.endThinkingIfNeeded(stream);
           stream.replyPartId = part.id;
           stream.replyStarted = true;
           this.sendEncryptedMessage({
@@ -505,6 +500,7 @@ export class RelayClient {
             data: { content: text }, timestamp: Date.now()
           });
         } else if (stream.replyPartId === part.id && text) {
+          this.endThinkingIfNeeded(stream);
           this.sendEncryptedMessage({
             type: 'reply', id: part.id, stream: 'replace',
             data: { content: text }, timestamp: Date.now()
@@ -548,10 +544,21 @@ export class RelayClient {
     if (!delta) return;
 
     if (stream.replyPartId === props.partID) {
+      this.endThinkingIfNeeded(stream);
       this.sendEncryptedMessage({
         type: 'reply', id: stream.replyPartId, stream: 'append',
         data: { content: delta }, timestamp: Date.now()
       });
+    }
+  }
+
+  private endThinkingIfNeeded(stream: NonNullable<RelayClient['activeStream']>): void {
+    if (!stream.thinkingEnded) {
+      this.sendEncryptedMessage({
+        type: 'thinking', id: stream.thinkingId, stream: 'end',
+        data: { content: stream.thinkingText || '' }, timestamp: Date.now()
+      });
+      stream.thinkingEnded = true;
     }
   }
 
@@ -567,13 +574,7 @@ export class RelayClient {
       stream.replyStarted = false;
     }
 
-    if (!stream.thinkingEnded) {
-      this.sendEncryptedMessage({
-        type: 'thinking', id: stream.thinkingId, stream: 'end',
-        data: { content: stream.thinkingText || '' }, timestamp: Date.now()
-      });
-      stream.thinkingEnded = true;
-    }
+    this.endThinkingIfNeeded(stream);
 
     const resolve = this.streamResolve;
     this.streamResolve = null;

@@ -179,6 +179,7 @@ export class DirectServer {
       if (this.sessionInitDone) {
         console.log('[Direct] Reconnect detected, skipping session init');
         this.startSseSubscription();
+        this.pushSessionList();
         if (this.pendingSyncSeq >= 0) {
           console.log(`[Direct] Processing pending sync (lastSeq=${this.pendingSyncSeq})`);
           this.processSync(this.pendingSyncSeq).catch((e: any) => {
@@ -523,6 +524,7 @@ export class DirectServer {
 
     switch (part.type) {
       case 'reasoning': {
+        if (stream.thinkingEnded) break;
         const text = part.text || '';
         if (text && text !== stream.thinkingText) {
           stream.thinkingText = text;
@@ -536,13 +538,7 @@ export class DirectServer {
       case 'text': {
         const text = part.text || '';
         if (!stream.replyPartId) {
-          if (!stream.thinkingEnded) {
-            this.sendEncryptedMessage({
-              type: 'thinking', id: stream.thinkingId, stream: 'end',
-              data: { content: stream.thinkingText || '' }, timestamp: Date.now()
-            });
-            stream.thinkingEnded = true;
-          }
+          this.endThinkingIfNeeded(stream);
           stream.replyPartId = part.id;
           stream.replyStarted = true;
           this.sendEncryptedMessage({
@@ -550,6 +546,7 @@ export class DirectServer {
             data: { content: text }, timestamp: Date.now()
           });
         } else if (stream.replyPartId === part.id && text) {
+          this.endThinkingIfNeeded(stream);
           this.sendEncryptedMessage({
             type: 'reply', id: part.id, stream: 'replace',
             data: { content: text }, timestamp: Date.now()
@@ -608,10 +605,21 @@ export class DirectServer {
     if (!delta) return;
 
     if (stream.replyPartId === props.partID) {
+      this.endThinkingIfNeeded(stream);
       this.sendEncryptedMessage({
         type: 'reply', id: stream.replyPartId, stream: 'append',
         data: { content: delta }, timestamp: Date.now()
       });
+    }
+  }
+
+  private endThinkingIfNeeded(stream: NonNullable<DirectServer['activeStream']>): void {
+    if (!stream.thinkingEnded) {
+      this.sendEncryptedMessage({
+        type: 'thinking', id: stream.thinkingId, stream: 'end',
+        data: { content: stream.thinkingText || '' }, timestamp: Date.now()
+      });
+      stream.thinkingEnded = true;
     }
   }
 
@@ -627,13 +635,7 @@ export class DirectServer {
       stream.replyStarted = false;
     }
 
-    if (!stream.thinkingEnded) {
-      this.sendEncryptedMessage({
-        type: 'thinking', id: stream.thinkingId, stream: 'end',
-        data: { content: stream.thinkingText || '' }, timestamp: Date.now()
-      });
-      stream.thinkingEnded = true;
-    }
+    this.endThinkingIfNeeded(stream);
 
     const resolve = this.streamResolve;
     this.streamResolve = null;
