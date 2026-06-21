@@ -88,26 +88,23 @@ export struct MessageBubble {
             .fontColor('#bfbfbf')
             .maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
-            .width('100%')
+            .constraintSize({ maxWidth: '100%' })
             .margin({ top: 4 })
         } else {
           Text(this.message.data.content || '(空)')
             .fontSize(13)
             .fontColor('#595959')
-            .width('100%')
+            .constraintSize({ maxWidth: '100%' })
             .margin({ top: 6 })
         }
       }
-      .constraintSize({ maxWidth: '80%' })
-      .padding({ left: 16, right: 16, top: 8, bottom: 8 })
+      .layoutWeight(1)
+      .padding({ left: 12, right: 12, top: 8, bottom: 8 })
       .backgroundColor('#F5F5F5')
       .borderRadius(12)
-      .clip(true)
-      .onClick(() => {
-        this.isThinkingExpanded = !this.isThinkingExpanded;
-      })
 
       Blank()
+        .width(40)
     }
     .width('100%')
     .margin({ bottom: 8 })
