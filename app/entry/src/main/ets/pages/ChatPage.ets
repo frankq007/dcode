@@ -5,7 +5,7 @@ import { voiceService } from '../services/VoiceService';
 import { MessageBubble } from '../components/MessageBubble';
 import { SessionListSheet } from '../components/SessionListSheet';
 import router from '@ohos.router';
-import { promptAction, KeyboardAvoidMode } from '@kit.ArkUI';
+import { promptAction } from '@kit.ArkUI';
 
 interface ChatPageParams {
   connectionId?: string;
@@ -56,17 +56,8 @@ struct ChatPage {
       }
     }
 
-    this.setKeyboardAvoidMode();
     this.setupWebSocket();
     this.setupVoiceInput();
-  }
-
-  private setKeyboardAvoidMode() {
-    try {
-      this.getUIContext().setKeyboardAvoidMode(KeyboardAvoidMode.RESIZE);
-    } catch (e) {
-      console.error('[ChatPage] setKeyboardAvoidMode error:', e);
-    }
   }
 
   setupWebSocket() {
