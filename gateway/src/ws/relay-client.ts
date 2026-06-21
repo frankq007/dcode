@@ -511,6 +511,7 @@ export class RelayClient {
       }
       case 'tool': {
         const toolState = (part as any).state || {};
+        if (toolState.status && toolState.status !== 'completed') break;
         this.sendEncryptedMessage({
           type: 'tool_call', id: part.id, stream: 'end',
           data: {

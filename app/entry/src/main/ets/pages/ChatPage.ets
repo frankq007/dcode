@@ -263,7 +263,9 @@ struct ChatPage {
           id: old.id,
           seq: old.seq,
           stream: stream,
-          data: { content: newContent },
+          data: old.type === 'tool_call'
+            ? message.data
+            : { content: newContent },
           timestamp: old.timestamp
         };
         const arr = [...this.messages];

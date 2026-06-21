@@ -117,6 +117,17 @@ export struct MessageBubble {
     .margin({ bottom: 8 })
   }
 
+  private hasParameters(): boolean {
+    const p = this.message.data.parameters;
+    if (!p) return false;
+    if (typeof p === 'string') return p.length > 0;
+    try {
+      return Object.keys(p as object).length > 0;
+    } catch {
+      return false;
+    }
+  }
+
   @Builder
   ToolCallMessage() {
     Row() {
@@ -131,7 +142,7 @@ export struct MessageBubble {
             .maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
             .margin({ left: 4 })
-          Blank()
+            .layoutWeight(1)
           if (this.message.data.result) {
             Text(this.isToolExpanded ? '收起' : '详情')
               .fontSize(11)
@@ -143,7 +154,7 @@ export struct MessageBubble {
         }
         .width('100%')
 
-        if (this.message.data.parameters) {
+        if (this.hasParameters()) {
           Text(`参数: ${JSON.stringify(this.message.data.parameters)}`)
             .fontSize(11)
             .fontColor('#999999')
@@ -161,13 +172,14 @@ export struct MessageBubble {
             .width('100%')
         }
       }
-      .constraintSize({ maxWidth: '80%' })
-      .padding({ left: 16, right: 16, top: 8, bottom: 8 })
+      .layoutWeight(1)
+      .padding({ left: 12, right: 12, top: 10, bottom: 10 })
       .backgroundColor('#E8F5E9')
       .borderRadius(12)
       .clip(true)
 
       Blank()
+        .width(40)
     }
     .width('100%')
     .margin({ bottom: 8 })
