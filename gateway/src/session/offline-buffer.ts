@@ -29,7 +29,9 @@ export class OfflineEventBuffer {
 
   isBufferable(message: Message): boolean {
     if (!this.isEventType(message.type)) return false;
-    if (message.stream === 'start' || message.stream === 'append') return false;
+    const stream = message.stream;
+    if (stream === 'start' || stream === 'append') return false;
+    if (message.type === 'tool_call') return false;
     return true;
   }
 
