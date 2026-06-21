@@ -51,6 +51,22 @@ export class ConnectionService {
   }
 
   async add(connection: Connection): Promise<void> {
+    const ids = Array.from(this.connections.keys());
+    for (let i = 0; i < ids.length; i++) {
+      const existing = this.connections.get(ids[i]);
+      if (existing &&
+          existing.host === connection.host &&
+          existing.port === connection.port &&
+          existing.publicKey === connection.publicKey) {
+        existing.name = connection.name;
+        existing.isOnline = connection.isOnline;
+        existing.lastConnected = connection.lastConnected;
+        existing.token = connection.token;
+        this.connections.set(ids[i], existing);
+        await this.saveConnections();
+        return;
+      }
+    }
     this.connections.set(connection.id, connection);
     await this.saveConnections();
   }

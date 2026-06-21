@@ -6,6 +6,7 @@ import router from '@ohos.router';
 export struct ConnectionListItem {
   @Prop connection: Connection;
   @State showActions: boolean = false;
+  onDelete: (id: string) => void = () => {};
 
   build() {
     Row() {
@@ -67,7 +68,7 @@ export struct ConnectionListItem {
   async deleteConnection() {
     try {
       await connectionService.delete(this.connection.id);
-      // Refresh would be handled by parent component
+      this.onDelete(this.connection.id);
     } catch (e) {
       console.error('[ConnectionListItem] Delete failed:', e);
     }

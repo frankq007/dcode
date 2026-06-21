@@ -104,7 +104,12 @@ struct ConnectionListPage {
           List() {
             ForEach(this.connections, (connection: Connection) => {
               ListItem() {
-                ConnectionListItem({ connection: connection })
+                ConnectionListItem({
+                  connection: connection,
+                  onDelete: (id: string) => {
+                    this.connections = this.connections.filter(c => c.id !== id);
+                  }
+                })
               }
             }, (connection: Connection) => connection.id)
           }
