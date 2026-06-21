@@ -536,6 +536,11 @@ struct ChatPage {
       .padding({ left: 12, right: 12, top: 8, bottom: 8 })
       .scrollBar(BarState.Off)
       .edgeEffect(EdgeEffect.Spring)
+      .onAreaChange(() => {
+        if (this.scroller) {
+          this.scroller.scrollEdge(Edge.Bottom);
+        }
+      })
     }
   }
 
