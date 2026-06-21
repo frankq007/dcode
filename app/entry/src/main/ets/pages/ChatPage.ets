@@ -165,6 +165,10 @@ struct ChatPage {
       case 'history': {
         this.loadingHistory = false;
         const historyMessages = message.data.messages || [];
+        this.messages = this.messages.filter((m: Message) => {
+          const s = m.stream;
+          return s === undefined || s === null || s === 'end' || s === 'aborted';
+        });
         const mapped = historyMessages.map((m: object) => this.mapHistoryMessage(m));
         const existingIds = new Set<string>();
         this.messages.forEach((m: Message) => existingIds.add(m.id));

@@ -696,7 +696,7 @@ export class DirectServer {
   }
 
   private sendEncryptedMessage(message: Message): void {
-    if (this.offlineBuffer.isEventType(message.type)) {
+    if (this.offlineBuffer.isBufferable(message)) {
       const session = this.sessions.getActive();
       if (session) {
         const seq = this.offlineBuffer.nextSeq(session.id);

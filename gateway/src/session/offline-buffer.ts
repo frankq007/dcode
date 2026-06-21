@@ -27,6 +27,12 @@ export class OfflineEventBuffer {
     return EVENT_TYPES.has(type);
   }
 
+  isBufferable(message: Message): boolean {
+    if (!this.isEventType(message.type)) return false;
+    if (message.stream === 'start' || message.stream === 'append') return false;
+    return true;
+  }
+
   nextSeq(sessionId: string): number {
     const current = this.seqCounters.get(sessionId) || 0;
     const next = current + 1;
