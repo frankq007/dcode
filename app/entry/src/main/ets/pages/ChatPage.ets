@@ -189,9 +189,11 @@ struct ChatPage {
           data: newData,
           timestamp: old.timestamp
         };
-        this.messages.splice(existing, 1, updated);
+        const arr = [...this.messages];
+        arr[existing] = updated;
+        this.messages = arr;
       } else {
-        this.messages.push(message);
+        this.messages = [...this.messages, message];
       }
       return;
     }
@@ -199,9 +201,11 @@ struct ChatPage {
     if (stream === 'replace') {
       const existing = this.messages.findIndex((m: Message) => m.id === message.id);
       if (existing >= 0) {
-        this.messages.splice(existing, 1, message);
+        const arr = [...this.messages];
+        arr[existing] = message;
+        this.messages = arr;
       } else {
-        this.messages.push(message);
+        this.messages = [...this.messages, message];
       }
       return;
     }
@@ -209,14 +213,26 @@ struct ChatPage {
     if (stream === 'end' || stream === 'aborted') {
       const existing = this.messages.findIndex((m: Message) => m.id === message.id);
       if (existing >= 0) {
-        this.messages.splice(existing, 1, message);
+        const old = this.messages[existing];
+        const newContent = message.data.content || old.data.content || '';
+        const updated: Message = {
+          type: old.type,
+          id: old.id,
+          seq: old.seq,
+          stream: stream,
+          data: { content: newContent },
+          timestamp: old.timestamp
+        };
+        const arr = [...this.messages];
+        arr[existing] = updated;
+        this.messages = arr;
       } else {
-        this.messages.push(message);
+        this.messages = [...this.messages, message];
       }
       return;
     }
 
-    this.messages.push(message);
+    this.messages = [...this.messages, message];
   }
 
   private scrollToBottom() {
@@ -411,7 +427,7 @@ struct ChatPage {
           ListItem() {
             MessageBubble({ message: message })
           }
-        }, (message: Message) => message.id)
+        }, (message: Message) => message.id + '_' + (message.stream || 'none'))
       }
       .width('100%')
       .layoutWeight(1)

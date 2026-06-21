@@ -90,7 +90,7 @@ struct ConnectionListPage {
               .margin({ left: 12 })
               .backgroundColor('#52c41a')
               .onClick(() => {
-                const qrData: string = '{"mode":"direct","name":"TestPC","host":"10.0.2.2","port":8765,"publicKey":"dgnsuMj9Fq5DxNhPoQTt5ySmcZJiE3ZkFKiYLfhY3W4=","token":"dcode-dev-token-0001"}';
+                const qrData: string = '{"mode":"direct","name":"TestPC","host":"10.0.2.2","port":8765,"publicKey":"EpetHxCEvFPsYru7miRzlgSGNRi6bo3LM8rP65L4UWY=","token":"dcode-dev-token-0001"}';
                 router.pushUrl({ url: 'pages/ChatPage', params: { qrData: qrData } });
               })
           }

@@ -384,9 +384,14 @@ export class DirectServer {
 
     try {
       console.log(`[Direct] Processing queued message: "${message.data.content?.substring(0, 30)}"`);
+      const thinkingId = `thinking_${Date.now()}`;
+      this.sendEncryptedMessage({
+        type: 'thinking', id: thinkingId, stream: 'start',
+        data: { content: '' }, timestamp: Date.now()
+      });
       await this.opencode.sendMessage(session.id, message.data.content, (part, msgInfo) => {
         console.log(`[Direct] forwardPartToApp: type=${part.type} id=${part.id}`);
-        this.forwardPartToApp(part, msgInfo);
+        this.forwardPartToApp(part, msgInfo, thinkingId);
       });
       console.log('[Direct] opencode.sendMessage completed');
     } catch (e: any) {
@@ -398,36 +403,25 @@ export class DirectServer {
     }
   }
 
-  private forwardPartToApp(part: OpencodePart, msgInfo: OpencodeMessageInfo): void {
+  private forwardPartToApp(part: OpencodePart, msgInfo: OpencodeMessageInfo, thinkingId?: string): void {
     switch (part.type) {
       case 'reasoning': {
         const text = part.text || '';
-        this.sendEncryptedMessage({
-          type: 'thinking', id: part.id, stream: 'start',
-          data: { content: '' }, timestamp: Date.now()
-        });
+        const id = thinkingId || part.id;
         if (text) {
           this.sendEncryptedMessage({
-            type: 'thinking', id: part.id, stream: 'append',
+            type: 'thinking', id: id, stream: 'replace',
             data: { content: text }, timestamp: Date.now()
           });
         }
-        this.sendEncryptedMessage({
-          type: 'thinking', id: part.id, stream: 'end',
-          data: { content: text }, timestamp: Date.now()
-        });
         break;
       }
       case 'text': {
         const text = part.text || '';
-        this.sendEncryptedMessage({
-          type: 'reply', id: part.id, stream: 'start',
-          data: { content: '' }, timestamp: Date.now()
-        });
-        if (text) {
+        if (thinkingId) {
           this.sendEncryptedMessage({
-            type: 'reply', id: part.id, stream: 'append',
-            data: { content: text }, timestamp: Date.now()
+            type: 'thinking', id: thinkingId, stream: 'end',
+            data: { content: '' }, timestamp: Date.now()
           });
         }
         this.sendEncryptedMessage({

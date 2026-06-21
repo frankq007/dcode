@@ -61,28 +61,35 @@ export struct MessageBubble {
     Row() {
       Column() {
         Row() {
-          Text('思考')
-            .fontSize(12)
-            .fontColor('#8c8c8c')
-            .fontWeight(FontWeight.Medium)
           if (this.isStreaming()) {
             LoadingProgress()
               .width(12)
               .height(12)
-              .margin({ left: 6 })
-              .color('#bfbfbf')
+              .color('#1890ff')
           }
+          Text(this.isStreaming() ? '执行中' : '思考过程')
+            .fontSize(12)
+            .fontColor(this.isStreaming() ? '#1890ff' : '#8c8c8c')
+            .fontWeight(FontWeight.Medium)
+            .margin({ left: this.isStreaming() ? 6 : 0 })
           Blank()
-          Text(this.isThinkingExpanded ? '收起' : '展开')
-            .fontSize(11)
-            .fontColor('#1890ff')
-            .onClick(() => {
-              this.isThinkingExpanded = !this.isThinkingExpanded;
-            })
+          if (!this.isStreaming() && this.message.data.content) {
+            Text(this.isThinkingExpanded ? '收起' : '展开')
+              .fontSize(11)
+              .fontColor('#1890ff')
+              .onClick(() => {
+                this.isThinkingExpanded = !this.isThinkingExpanded;
+              })
+          }
         }
         .width('100%')
 
-        if (!this.isThinkingExpanded) {
+        if (this.isStreaming()) {
+          Text('正在等待 AI 响应...')
+            .fontSize(12)
+            .fontColor('#bfbfbf')
+            .margin({ top: 4 })
+        } else if (!this.isThinkingExpanded) {
           Text(this.thinkingPreview())
             .fontSize(12)
             .fontColor('#bfbfbf')
@@ -276,7 +283,7 @@ export struct MessageBubble {
   private thinkingPreview(): string {
     const c = this.message.data.content || '';
     if (!c) {
-      return this.isStreaming() ? '思考中...' : '(空)';
+      return this.isStreaming() ? '正在等待 AI 响应...' : '(空)';
     }
     return c;
   }
