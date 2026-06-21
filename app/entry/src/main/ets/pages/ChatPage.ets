@@ -444,6 +444,9 @@ struct ChatPage {
         .onChange((value: string) => {
           this.inputText = value;
         })
+        .onFocus(() => {
+          this.scrollToBottom();
+        })
         .onSubmit(() => {
           this.sendMessage();
         })

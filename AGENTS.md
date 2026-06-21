@@ -43,6 +43,29 @@ npm test             # Run unit tests
 # Open app/ in DevEco Studio, run on emulator or device
 `
 
+### Starting Gateway in Background (Windows / VBS)
+
+For automated workflows and UI verification where the gateway must run
+detached and the calling process must return immediately, use the VBS
+launcher:
+
+`ash
+# Launches gateway fully detached, hidden window, returns in ~250ms
+cscript //nologo start_gateway.vbs
+`
+
+- **`start_gateway.vbs`** uses `WScript.Shell.Run(..., 0, False)`:
+  - window style `0` = hidden (no console popup)
+  - `False` = do not wait for the process to exit (returns immediately)
+- Configuration is read from **`gateway/gateway.config.json`** (not env vars),
+  so the VBS does not need to set `DCODE_OPENCODE_URL` etc.
+- Stdout/stderr are redirected to `gw-stdout.log` / `gw-stderr.log` in the
+  repo root for log inspection.
+- To stop the gateway: find the PID listening on port 8765 and kill it:
+  `Get-NetTCPConnection -State Listen -LocalPort 8765 | Stop-Process -Id { $_.OwningProcess }`
+- To restart: kill the old process first, then re-run the VBS. The app will
+  auto-reconnect via its reconnection logic.
+
 ## Coding Style & Naming Conventions
 
 **TypeScript (gateway/relay)**:

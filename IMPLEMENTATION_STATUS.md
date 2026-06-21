@@ -255,3 +255,41 @@ npm run dev
 
 **最后更新**: 2026-06-07
 **版本**: 0.1.0
+
+---
+
+## UI Intent Verification Results (2026-06-21)
+
+### V3.1 Chat Flow e2e - PASS
+
+Tested on Pura 90 emulator, gateway via VBS, real opencode serve (port 3001, glm-5.2).
+
+| Check | Result | Evidence |
+|-------|--------|----------|
+| User message delivery (app->gateway->opencode) | PASS | Gateway log: user_message received |
+| message_ack sent immediately | PASS | Gateway log: Sent to app type=message_ack |
+| Thinking bubble rendered (collapsed + expand) | PASS | UI tree: thinking header + expand button |
+| Thinking forwarded as type=thinking stream=end | PASS | Gateway log: type=thinking stream=end seq=1 |
+| Reply forwarded as type=reply stream=end | PASS | Gateway log: type=reply stream=end seq=2 |
+| Reply rendered via lv-markdown-in component | PASS | UI tree: md_selection_root / md_select compids |
+| No residual LoadingProgress after stream=end | PASS | No LoadingProgress nodes in reply ListItem |
+| opencode.sendMessage completed | PASS | Gateway log confirms completion |
+
+### V5.1 Markdown Rendering - PARTIAL PASS
+
+| Check | Result | Evidence |
+|-------|--------|----------|
+| lv-markdown-in component integrated | PASS | oh-package.json5 has @luvi/lv-markdown-in |
+| Reply text rendered through Markdown component | PASS | md_selection_root structure in UI tree |
+| Markdown syntax rendering (##, -, `) | NOT VERIFIED | Forwarded text was plain, not Markdown test content |
+| Mermaid offline rendering | NOT TESTED | - |
+
+Root cause: gateway non-streaming sendMessage returns only the final assistant message.
+When the AI agent makes tool calls, earlier text responses are in separate messages and
+NOT forwarded. Recommendation: switch to sendMessageStream (SSE).
+
+### Known Issues Found
+
+1. Gateway synchronous POST blocks indefinitely with large session context (73+ messages).
+2. Gateway publicKey changes on restart; app hardcoded QR data must be updated.
+3. Session title shows loading on reconnect before session_list arrives.
