@@ -330,18 +330,42 @@ export class RelayClient {
 
   private forwardPartToApp(part: OpencodePart, msgInfo: OpencodeMessageInfo): void {
     switch (part.type) {
-      case 'reasoning':
+      case 'reasoning': {
+        const text = part.text || '';
+        this.sendEncryptedMessage({
+          type: 'thinking', id: part.id, stream: 'start',
+          data: { content: '' }, timestamp: Date.now()
+        });
+        if (text) {
+          this.sendEncryptedMessage({
+            type: 'thinking', id: part.id, stream: 'append',
+            data: { content: text }, timestamp: Date.now()
+          });
+        }
         this.sendEncryptedMessage({
           type: 'thinking', id: part.id, stream: 'end',
-          data: { content: part.text || '' }, timestamp: Date.now()
+          data: { content: text }, timestamp: Date.now()
         });
         break;
-      case 'text':
+      }
+      case 'text': {
+        const text = part.text || '';
+        this.sendEncryptedMessage({
+          type: 'reply', id: part.id, stream: 'start',
+          data: { content: '' }, timestamp: Date.now()
+        });
+        if (text) {
+          this.sendEncryptedMessage({
+            type: 'reply', id: part.id, stream: 'append',
+            data: { content: text }, timestamp: Date.now()
+          });
+        }
         this.sendEncryptedMessage({
           type: 'reply', id: part.id, stream: 'end',
-          data: { content: part.text || '' }, timestamp: Date.now()
+          data: { content: text }, timestamp: Date.now()
         });
         break;
+      }
       case 'tool':
         this.sendEncryptedMessage({
           type: 'tool_call', id: part.id, stream: 'end',

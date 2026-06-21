@@ -204,15 +204,10 @@ export class DirectServer {
       }
     }
 
-    if (this.sessions.list().length === 0) {
-      const created = await this.opencode.createSession();
-      this.sessions.create(created.id, created.title);
-      console.log(`[Direct] Created new session: ${created.title} (${created.id})`);
-    } else {
-      const latest = existing[0];
-      this.sessions.switch(latest.id);
-      console.log(`[Direct] Using latest session: ${latest.title} (${latest.id})`);
-    }
+    const created = await this.opencode.createSession();
+    this.sessions.create(created.id, created.title);
+    this.sessions.switch(created.id);
+    console.log(`[Direct] Created fresh session for app: ${created.title} (${created.id})`);
 
     await this.pushSessionList();
     const active = this.sessions.getActive();
@@ -405,24 +400,42 @@ export class DirectServer {
 
   private forwardPartToApp(part: OpencodePart, msgInfo: OpencodeMessageInfo): void {
     switch (part.type) {
-      case 'reasoning':
+      case 'reasoning': {
+        const text = part.text || '';
         this.sendEncryptedMessage({
-          type: 'thinking',
-          id: part.id,
-          stream: 'end',
-          data: { content: part.text || '' },
-          timestamp: Date.now()
+          type: 'thinking', id: part.id, stream: 'start',
+          data: { content: '' }, timestamp: Date.now()
+        });
+        if (text) {
+          this.sendEncryptedMessage({
+            type: 'thinking', id: part.id, stream: 'append',
+            data: { content: text }, timestamp: Date.now()
+          });
+        }
+        this.sendEncryptedMessage({
+          type: 'thinking', id: part.id, stream: 'end',
+          data: { content: text }, timestamp: Date.now()
         });
         break;
-      case 'text':
+      }
+      case 'text': {
+        const text = part.text || '';
         this.sendEncryptedMessage({
-          type: 'reply',
-          id: part.id,
-          stream: 'end',
-          data: { content: part.text || '' },
-          timestamp: Date.now()
+          type: 'reply', id: part.id, stream: 'start',
+          data: { content: '' }, timestamp: Date.now()
+        });
+        if (text) {
+          this.sendEncryptedMessage({
+            type: 'reply', id: part.id, stream: 'append',
+            data: { content: text }, timestamp: Date.now()
+          });
+        }
+        this.sendEncryptedMessage({
+          type: 'reply', id: part.id, stream: 'end',
+          data: { content: text }, timestamp: Date.now()
         });
         break;
+      }
       case 'tool':
         this.sendEncryptedMessage({
           type: 'tool_call',
