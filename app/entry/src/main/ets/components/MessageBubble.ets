@@ -1,4 +1,4 @@
-import { Message, MessageData } from '../models/index';
+import { Message, MessageData, ToolCallItem } from '../models/index';
 import { webSocketService } from '../services/WebSocketService';
 import { Markdown } from '@luvi/lv-markdown-in';
 import { MermaidDiagram } from './MermaidDiagram';
@@ -128,6 +128,39 @@ export struct MessageBubble {
     }
   }
 
+  private hasToolParameters(tool: ToolCallItem): boolean {
+    if (!tool.parameters) return false;
+    if (typeof tool.parameters === 'string') return (tool.parameters as string).length > 0;
+    try {
+      return Object.keys(tool.parameters as object).length > 0;
+    } catch {
+      return false;
+    }
+  }
+
+  private getToolList(): ToolCallItem[] {
+    if (this.message.data.tools && this.message.data.tools.length > 0) {
+      return this.message.data.tools;
+    }
+    const tools: ToolCallItem[] = [];
+    if (this.message.data.toolName) {
+      tools.push({
+        toolName: this.message.data.toolName,
+        parameters: this.message.data.parameters,
+        result: this.message.data.result
+      });
+    }
+    return tools;
+  }
+
+  private hasAnyResult(): boolean {
+    const tools = this.getToolList();
+    for (const t of tools) {
+      if (t.result) return true;
+    }
+    return false;
+  }
+
   @Builder
   ToolCallMessage() {
     Row() {
@@ -135,7 +168,9 @@ export struct MessageBubble {
         Row() {
           Text('🔧')
             .fontSize(14)
-          Text((this.message.data.toolName || this.message.data.name || '工具调用') as string)
+          Text(this.getToolList().length > 1
+            ? `工具调用 (${this.getToolList().length})`
+            : (this.message.data.toolName || this.message.data.name || '工具调用') as string)
             .fontSize(13)
             .fontWeight(FontWeight.Medium)
             .fontColor('#333333')
@@ -143,7 +178,7 @@ export struct MessageBubble {
             .textOverflow({ overflow: TextOverflow.Ellipsis })
             .margin({ left: 4 })
             .layoutWeight(1)
-          if (this.message.data.result) {
+          if (this.hasAnyResult()) {
             Text(this.isToolExpanded ? '收起' : '详情')
               .fontSize(11)
               .fontColor('#1890ff')
@@ -154,23 +189,41 @@ export struct MessageBubble {
         }
         .width('100%')
 
-        if (this.hasParameters()) {
-          Text(`参数: ${JSON.stringify(this.message.data.parameters)}`)
-            .fontSize(11)
-            .fontColor('#999999')
-            .margin({ top: 4 })
-            .maxLines(this.isToolExpanded ? undefined : 2)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
+        ForEach(this.getToolList(), (tool: ToolCallItem, index: number) => {
+          Column() {
+            if (index > 0) {
+              Divider()
+                .color('#e0e0e0')
+                .margin({ top: 6, bottom: 4 })
+            }
+            Row() {
+              Text(tool.toolName || 'unknown')
+                .fontSize(12)
+                .fontColor('#666666')
+                .layoutWeight(1)
+            }
             .width('100%')
-        }
 
-        if (this.message.data.result && this.isToolExpanded) {
-          Text(`结果: ${this.message.data.result}`)
-            .fontSize(11)
-            .fontColor('#666666')
-            .margin({ top: 4 })
-            .width('100%')
-        }
+            if (this.hasToolParameters(tool)) {
+                Text(`参数: ${JSON.stringify(tool.parameters)}`)
+                  .fontSize(11)
+                  .fontColor('#999999')
+                  .margin({ top: 2 })
+                  .maxLines(this.isToolExpanded ? undefined : 2)
+                  .textOverflow({ overflow: TextOverflow.Ellipsis })
+                  .width('100%')
+            }
+
+            if (tool.result && this.isToolExpanded) {
+              Text(`结果: ${tool.result}`)
+                .fontSize(11)
+                .fontColor('#666666')
+                .margin({ top: 2 })
+                .width('100%')
+            }
+          }
+          .width('100%')
+        }, (tool: ToolCallItem, index: number) => `${tool.toolName}_${index}`)
       }
       .layoutWeight(1)
       .padding({ left: 12, right: 12, top: 10, bottom: 10 })

@@ -1,4 +1,4 @@
-import { Connection, Message, Session, QRCodeData, MessageData } from '../models/index';
+import { Connection, Message, Session, QRCodeData, MessageData, ToolCallItem } from '../models/index';
 import { connectionService } from '../services/ConnectionService';
 import { webSocketService } from '../services/WebSocketService';
 import { voiceService } from '../services/VoiceService';
@@ -272,6 +272,37 @@ struct ChatPage {
         arr[existing] = updated;
         this.messages = arr;
       } else {
+        if (message.type === 'tool_call' && this.messages.length > 0) {
+          const lastIdx = this.messages.length - 1;
+          const last = this.messages[lastIdx];
+          if (last.type === 'tool_call') {
+            const tools: ToolCallItem[] = last.data.tools ? [...last.data.tools] : [];
+            if (tools.length === 0 && last.data.toolName) {
+              tools.push({
+                toolName: last.data.toolName,
+                parameters: last.data.parameters,
+                result: last.data.result
+              });
+            }
+            tools.push({
+              toolName: message.data.toolName || 'unknown',
+              parameters: message.data.parameters,
+              result: message.data.result || ''
+            });
+            const updated: Message = {
+              type: last.type,
+              id: last.id,
+              seq: last.seq,
+              stream: last.stream,
+              data: { tools: tools },
+              timestamp: last.timestamp
+            };
+            const arr2 = [...this.messages];
+            arr2[lastIdx] = updated;
+            this.messages = arr2;
+            return;
+          }
+        }
         this.messages = [...this.messages, message];
       }
       return;
@@ -504,7 +535,10 @@ struct ChatPage {
           ListItem() {
             MessageBubble({ message: message })
           }
-        }, (message: Message) => message.id + '_' + (message.stream || 'none'))
+        }, (message: Message) => {
+          const toolCount = message.data.tools ? message.data.tools.length : 0;
+          return message.id + '_' + (message.stream || 'none') + '_' + toolCount;
+        })
       }
       .width('100%')
       .layoutWeight(1)

@@ -51,12 +51,19 @@ export type MessageType =
   | 'sync'
   | 'error';
 
+export interface ToolCallItem {
+  toolName: string;
+  parameters?: string | object;
+  result?: string;
+}
+
 export interface MessageData {
   content?: string;
   name?: string;
   toolName?: string;
   parameters?: string | object;
   result?: string;
+  tools?: ToolCallItem[];
   description?: string;
   requestId?: string;
   allowed?: boolean;
