@@ -28,6 +28,7 @@ export interface Session {
   name: string;
   createdAt: number;
   lastActivity: number;
+  isActive?: boolean;
 }
 
 export type MessageType =
@@ -63,6 +64,9 @@ export interface MessageData {
   url?: string;
   sessions?: Session[];
   sessionId?: string;
+  isActive?: boolean;
+  createdAt?: number;
+  lastActivity?: number;
   messages?: object[];
   hasMore?: boolean;
   cursor?: string;

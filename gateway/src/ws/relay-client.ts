@@ -154,36 +154,42 @@ export class RelayClient {
   }
 
   private async initializeFirstSession(): Promise<void> {
-    let activeSessionId: string | null = null;
+    let existing = await this.opencode.listSessions();
+    existing = existing.filter(s => !s.time.archived);
 
-    try {
-      const existing = await this.opencode.listSessions();
-      if (existing.length > 0) {
-        for (const s of existing) {
-          this.sessions.create(s.id, s.title);
-        }
-        activeSessionId = existing[0].id;
-        this.sessions.switch(activeSessionId);
+    for (const s of existing) {
+      if (!this.sessions.get(s.id)) {
+        this.sessions.create(s.id, s.title || `Session ${this.sessions.list().length + 1}`);
       }
-    } catch (e: any) {
-      console.warn('[Relay] Failed to list sessions, will create new:', e.message);
     }
 
-    if (!activeSessionId) {
-      const created = await this.opencode.createSession();
-      this.sessions.create(created.id, created.title);
-      activeSessionId = created.id;
-    }
+    const created = await this.opencode.createSession();
+    this.sessions.create(created.id, created.title);
+    this.sessions.switch(created.id);
+    console.log(`[Relay] Created fresh session for app: ${created.title} (${created.id})`);
 
     await this.pushSessionList();
-    await this.pushHistory(activeSessionId);
+    const active = this.sessions.getActive();
+    if (active) {
+      await this.pushHistory(active.id);
+    }
   }
 
   private async pushSessionList(): Promise<void> {
+    const active = this.sessions.getActive();
+    const activeId = active ? active.id : null;
     this.sendEncryptedMessage({
       type: 'session_list',
       id: randomUUID(),
-      data: { sessions: this.sessions.list().map(s => ({ id: s.id, name: s.name })) },
+      data: {
+        sessions: this.sessions.list().map(s => ({
+          id: s.id,
+          name: s.name,
+          createdAt: s.createdAt,
+          lastActivity: s.lastActivity,
+          isActive: s.id === activeId
+        }))
+      },
       timestamp: Date.now()
     });
   }
@@ -295,6 +301,11 @@ export class RelayClient {
     const lastSeq = (message.data as any).lastSeq || 0;
     console.log(`[Relay] Sync request: lastSeq=${lastSeq}, session=${session.id}`);
 
+    if (lastSeq === 0) {
+      this.pushSessionList();
+      this.pushHistory(session.id);
+    }
+
     const events = this.offlineBuffer.since(session.id, lastSeq);
     console.log(`[Relay] Replaying ${events.length} offline events for session ${session.id}`);
 
@@ -400,6 +411,12 @@ export class RelayClient {
       const created = await this.opencode.createSession();
       this.sessions.create(created.id, created.title);
       await this.pushSessionList();
+
+      this.sendEncryptedMessage({
+        type: 'session_switch', id: randomUUID(),
+        data: { sessionId: created.id, name: created.title, isActive: true }, timestamp: Date.now()
+      });
+      await this.pushHistory(created.id);
     } catch (e: any) {
       this.sendError(`Failed to create session: ${e.message}`, 'INTERNAL');
     }
@@ -410,7 +427,7 @@ export class RelayClient {
     if (session) {
       this.sendEncryptedMessage({
         type: 'session_switch', id: randomUUID(),
-        data: { sessionId: session.id, name: session.name }, timestamp: Date.now()
+        data: { sessionId: session.id, name: session.name, isActive: true }, timestamp: Date.now()
       });
       await this.pushHistory(session.id);
     }

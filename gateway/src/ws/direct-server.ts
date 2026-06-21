@@ -217,10 +217,20 @@ export class DirectServer {
   }
 
   private async pushSessionList(): Promise<void> {
+    const active = this.sessions.getActive();
+    const activeId = active ? active.id : null;
     this.sendEncryptedMessage({
       type: 'session_list',
       id: randomUUID(),
-      data: { sessions: this.sessions.list().map(s => ({ id: s.id, name: s.name })) },
+      data: {
+        sessions: this.sessions.list().map(s => ({
+          id: s.id,
+          name: s.name,
+          createdAt: s.createdAt,
+          lastActivity: s.lastActivity,
+          isActive: s.id === activeId
+        }))
+      },
       timestamp: Date.now()
     });
   }
@@ -337,6 +347,7 @@ export class DirectServer {
     }
 
     if (lastSeq === 0) {
+      await this.pushSessionList();
       await this.pushHistory(session.id);
     }
 
@@ -500,7 +511,7 @@ export class DirectServer {
       this.sendEncryptedMessage({
         type: 'session_switch',
         id: randomUUID(),
-        data: { sessionId: created.id, name: created.title },
+        data: { sessionId: created.id, name: created.title, isActive: true },
         timestamp: Date.now()
       });
       await this.pushHistory(created.id);
@@ -515,7 +526,7 @@ export class DirectServer {
       this.sendEncryptedMessage({
         type: 'session_switch',
         id: randomUUID(),
-        data: { sessionId: session.id, name: session.name },
+        data: { sessionId: session.id, name: session.name, isActive: true },
         timestamp: Date.now()
       });
       await this.pushHistory(session.id);

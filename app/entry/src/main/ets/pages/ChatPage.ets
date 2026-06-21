@@ -3,6 +3,7 @@ import { connectionService } from '../services/ConnectionService';
 import { webSocketService } from '../services/WebSocketService';
 import { voiceService } from '../services/VoiceService';
 import { MessageBubble } from '../components/MessageBubble';
+import { SessionListSheet } from '../components/SessionListSheet';
 import router from '@ohos.router';
 import { promptAction, KeyboardAvoidMode } from '@kit.ArkUI';
 
@@ -25,6 +26,7 @@ struct ChatPage {
   @State reviewUrl: string = '';
   @State loadingHistory: boolean = false;
   @State pendingMessageIds: Set<string> = new Set();
+  @State showSessionSheet: boolean = false;
 
   private connection: Connection | null = null;
   private scroller: Scroller = new Scroller();
@@ -114,10 +116,25 @@ struct ChatPage {
   handleIncomingMessage(message: Message) {
     switch (message.type) {
       case 'session_list': {
-        const sessions: Session[] = message.data.sessions || [];
+        const rawSessions = message.data.sessions || [];
+        const sessions: Session[] = rawSessions.map((s: object) => {
+          const r = s as Record<string, Object>;
+          return {
+            id: (r['id'] as string) || '',
+            name: (r['name'] as string) || '',
+            createdAt: (r['createdAt'] as number) || 0,
+            lastActivity: (r['lastActivity'] as number) || 0,
+            isActive: (r['isActive'] as boolean) || false
+          } as Session;
+        });
         this.sessions = sessions;
-        if (sessions.length > 0 && !this.currentSession) {
-          this.currentSession = sessions[0];
+        if (sessions.length > 0) {
+          const active = sessions.find(s => s.isActive);
+          if (active) {
+            this.currentSession = active;
+          } else if (!this.currentSession) {
+            this.currentSession = sessions[0];
+          }
         }
         break;
       }
@@ -125,9 +142,24 @@ struct ChatPage {
         this.currentSession = {
           id: message.data.sessionId || '',
           name: message.data.name || '',
-          createdAt: Date.now(),
-          lastActivity: Date.now()
+          createdAt: message.data.createdAt || Date.now(),
+          lastActivity: message.data.lastActivity || Date.now(),
+          isActive: true
         };
+        const sid = message.data.sessionId;
+        if (sid) {
+          const arr: Session[] = [];
+          for (const s of this.sessions) {
+            arr.push({
+              id: s.id,
+              name: s.name,
+              createdAt: s.createdAt,
+              lastActivity: s.lastActivity,
+              isActive: s.id === sid
+            });
+          }
+          this.sessions = arr;
+        }
         break;
       }
       case 'history': {
@@ -293,6 +325,7 @@ struct ChatPage {
   }
 
   createSession() {
+    this.showSessionSheet = false;
     const data: MessageData = {};
     const message: Message = {
       type: 'session_create',
@@ -302,11 +335,14 @@ struct ChatPage {
     };
 
     webSocketService.sendMessage(message);
+    this.messages = [];
+    this.loadingHistory = true;
   }
 
   switchSession(sessionId: string) {
     this.messages = [];
     this.loadingHistory = true;
+    this.showSessionSheet = false;
 
     const data: MessageData = { sessionId };
     const message: Message = {
@@ -317,6 +353,34 @@ struct ChatPage {
     };
 
     webSocketService.sendMessage(message);
+  }
+
+  deleteSession(sessionId: string) {
+    if (this.sessions.length <= 1) {
+      promptAction.showToast({ message: '至少保留一个会话' });
+      return;
+    }
+
+    const data: MessageData = { sessionId };
+    const message: Message = {
+      type: 'session_delete',
+      id: `msg_${Date.now()}`,
+      data: data,
+      timestamp: Date.now()
+    };
+
+    webSocketService.sendMessage(message);
+
+    this.sessions = this.sessions.filter(s => s.id !== sessionId);
+    if (this.currentSession && this.currentSession.id === sessionId) {
+      const next = this.sessions[0];
+      if (next) {
+        this.switchSession(next.id);
+      } else {
+        this.currentSession = null;
+        this.messages = [];
+      }
+    }
   }
 
   openReviewPage() {
@@ -371,7 +435,7 @@ struct ChatPage {
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
           .onClick(() => {
-            this.showSessionSwitcher();
+            this.showSessionSheet = true;
           })
 
         Row() {
@@ -487,54 +551,53 @@ struct ChatPage {
   }
 
   build() {
-    Column() {
-      this.TitleBar()
-      this.ChatArea()
-      this.InputBar()
+    Stack() {
+      Column() {
+        this.TitleBar()
+        this.ChatArea()
+        this.InputBar()
+      }
+      .width('100%')
+      .height('100%')
+
+      if (this.showSessionSheet) {
+        SessionListSheet({
+          sessions: this.sessions,
+          currentSessionId: this.currentSession ? this.currentSession.id : '',
+          onDeleteSession: (id: string) => {
+            this.deleteSession(id);
+          },
+          onSwitchSession: (id: string) => {
+            this.switchSession(id);
+          },
+          onCreateSession: () => {
+            this.createSession();
+          },
+          onClose: () => {
+            this.showSessionSheet = false;
+          }
+        })
+      }
     }
     .width('100%')
     .height('100%')
     .backgroundColor('#ededed')
   }
 
-  showSessionSwitcher() {
-    const count = Math.min(this.sessions.length, 5);
-    const buttons: promptAction.Button[] = [];
-    for (let i = 0; i < count; i++) {
-      buttons.push({ text: this.sessions[i].name, color: '#000000' });
-    }
-    buttons.push({ text: '+ 新建会话', color: '#52c41a' });
-
-    const b1 = buttons[0];
-    const b2 = buttons.length > 1 ? buttons[1] : undefined;
-    const b3 = buttons.length > 2 ? buttons[2] : undefined;
-    const b4 = buttons.length > 3 ? buttons[3] : undefined;
-    const b5 = buttons.length > 4 ? buttons[4] : undefined;
-    const b6 = buttons.length > 5 ? buttons[5] : undefined;
-
-    promptAction.showActionMenu({
-      title: '切换会话',
-      buttons: [b1, b2, b3, b4, b5, b6] as [promptAction.Button, promptAction.Button?, promptAction.Button?, promptAction.Button?, promptAction.Button?, promptAction.Button?]
-    }).then((result: promptAction.ActionMenuSuccessResponse) => {
-      if (result.index === count) {
-        this.createSession();
-      } else if (result.index < count) {
-        this.switchSession(this.sessions[result.index].id);
-      }
-    });
-  }
-
   showMenu() {
     promptAction.showActionMenu({
       title: '菜单',
       buttons: [
+        { text: '切换会话', color: '#000000' },
         { text: '代码审查', color: '#000000' },
         { text: '新建会话', color: '#52c41a' }
-      ] as [promptAction.Button, promptAction.Button, promptAction.Button?, promptAction.Button?, promptAction.Button?, promptAction.Button?]
+      ] as [promptAction.Button, promptAction.Button, promptAction.Button, promptAction.Button?, promptAction.Button?, promptAction.Button?]
     }).then((result: promptAction.ActionMenuSuccessResponse) => {
       if (result.index === 0) {
-        this.openReviewPage();
+        this.showSessionSheet = true;
       } else if (result.index === 1) {
+        this.openReviewPage();
+      } else if (result.index === 2) {
         this.createSession();
       }
     });
