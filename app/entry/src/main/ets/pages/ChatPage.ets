@@ -84,7 +84,14 @@ struct ChatPage {
       webSocketService.onConnectionChange((connected: boolean) => {
         this.isConnected = connected;
         if (connected && this.connection) {
-          connectionService.updateOnlineStatus(this.connection.id, true);
+          const existing = connectionService.get(this.connection.id);
+          if (existing) {
+            connectionService.updateOnlineStatus(this.connection.id, true);
+          } else {
+            this.connection.isOnline = true;
+            this.connection.lastConnected = Date.now();
+            connectionService.add(this.connection);
+          }
         }
       });
 
