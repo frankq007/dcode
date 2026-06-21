@@ -9,7 +9,7 @@ import { promptAction } from '@kit.ArkUI';
 struct ConnectionListPage {
   @State connections: Connection[] = [];
   @State isLoading: boolean = true;
-  @State quickPublicKey: string = 'SfCt8OTaNRoPAkk+5B2wkXBK0Jc9q/wJBViubVqjdEI=';
+  @State quickPublicKey: string = 'EiJK8hrKvMAJs1LJgtuISb/jptoJ7MRzQBGOgu5U2lU=';
   @State quickToken: string = 'dcode-dev-token-0001';
 
   aboutToAppear() {
@@ -90,7 +90,7 @@ struct ConnectionListPage {
               .margin({ left: 12 })
               .backgroundColor('#52c41a')
               .onClick(() => {
-                const qrData: string = '{"mode":"direct","name":"MyPC","host":"10.0.2.2","port":8765,"publicKey":"SfCt8OTaNRoPAkk+5B2wkXBK0Jc9q/wJBViubVqjdEI=","token":"dcode-dev-token-0001"}';
+                const qrData: string = '{"mode":"direct","name":"MyPC","host":"10.0.2.2","port":8765,"publicKey":"EiJK8hrKvMAJs1LJgtuISb/jptoJ7MRzQBGOgu5U2lU=","token":"dcode-dev-token-0001"}';
                 router.pushUrl({ url: 'pages/ChatPage', params: { qrData: qrData } });
               })
           }

@@ -509,13 +509,19 @@ export class RelayClient {
         }
         break;
       }
-      case 'tool':
+      case 'tool': {
+        const toolState = (part as any).state || {};
         this.sendEncryptedMessage({
           type: 'tool_call', id: part.id, stream: 'end',
-          data: { toolName: part.toolName || 'unknown', parameters: part.input || {}, result: part.output || '' },
+          data: {
+            toolName: (part as any).tool || part.toolName || 'unknown',
+            parameters: toolState.input || part.input || {},
+            result: toolState.output || part.output || ''
+          },
           timestamp: Date.now()
         });
         break;
+      }
       case 'step-finish':
         if (part.tokens) {
           this.sendEncryptedMessage({
