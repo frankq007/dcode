@@ -3,7 +3,7 @@ import { randomBytes } from 'crypto';
 import { CryptoManager } from './crypto/crypto-manager';
 
 const GW_URL = 'ws://127.0.0.1:8765';
-const TOKEN = '';
+const TOKEN = 'dcode-dev-token-0001';
 
 async function main() {
   const crypto = new CryptoManager();
@@ -11,6 +11,7 @@ async function main() {
   let gwNonce = '';
   let handshakeDone = false;
   let sawStream = false;
+  const replyStreams: string[] = [];
   const checks: Record<string, boolean> = {};
 
   console.log('=== E2E: App -> Gateway(8765) -> Real opencode(3000) ===');
@@ -84,17 +85,28 @@ async function main() {
       } else if (parsed.type === 'thinking') {
         checks['thinking'] = true;
         if (parsed.stream) sawStream = true;
-        console.log('     thinking: ' + (parsed.data.content || '').substring(0, 60));
+        console.log('     thinking [' + parsed.stream + ']: ' + (parsed.data.content || '').substring(0, 60));
 
       } else if (parsed.type === 'reply') {
         checks['reply'] = true;
         if (parsed.stream) sawStream = true;
-        console.log('     reply: ' + (parsed.data.content || '').substring(0, 100));
+        replyStreams.push(parsed.stream || 'none');
+        console.log('     reply [' + parsed.stream + ']: ' + (parsed.data.content || '').substring(0, 100));
 
       } else if (parsed.type === 'token_info') {
         checks['tokens'] = true;
         console.log('[8] token_info: ' + JSON.stringify(parsed.data));
 
+      } else if (parsed.type === 'thinking' && parsed.stream === 'end') {
+        // thinking end signals completion in SSE mode
+      }
+      if (parsed.type === 'reply' && parsed.stream === 'end') {
+        console.log('[9] reply stream=end - SSE flow complete');
+      }
+      if (parsed.type === 'thinking' && parsed.stream === 'end' && checks['reply']) {
+        // Final: thinking end after reply end = complete
+        const replyStart = replyStreams.includes('start');
+        const replyEnd = replyStreams.includes('end');
         const all = ['Token','ECDH+HKDF','GwVerify','AES','sessions','history','ack','thinking','reply','tokens'];
         console.log('');
         console.log('=========================================');
@@ -106,16 +118,23 @@ async function main() {
         }
         if (sawStream) { pass++; console.log('  PASS - stream markers'); }
         else console.log('  FAIL - stream markers');
+        if (replyStart) { pass++; console.log('  PASS - reply stream=start (SSE incremental)'); }
+        else console.log('  FAIL - reply stream=start (SSE incremental)');
+        if (replyStreams.includes('append') || replyStreams.includes('replace')) {
+          pass++; console.log('  PASS - reply stream=append/replace (delta)'); }
+        else console.log('  FAIL - reply stream=append/replace (delta)');
+        if (replyEnd) { pass++; console.log('  PASS - reply stream=end'); }
+        else console.log('  FAIL - reply stream=end');
 
-        const total = all.length + 1;
+        const total = all.length + 4;
         console.log('=========================================');
         console.log('  ' + pass + '/' + total + ' checks passed');
+        console.log('  reply streams seen: ' + JSON.stringify(replyStreams));
         if (pass === total) console.log('  ALL PASSED');
         console.log('=========================================');
 
         ws.close();
         process.exit(pass === total ? 0 : 1);
-
       } else if (parsed.type === 'error') {
         console.error('ERROR: ' + JSON.stringify(parsed.data));
       }

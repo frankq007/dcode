@@ -49,8 +49,20 @@ export interface OpencodeMessage {
 
 export type PartHandler = (part: OpencodePart, messageInfo: OpencodeMessageInfo) => void;
 
+export interface OpencodeEvent {
+  id: string;
+  type: string;
+  properties: any;
+}
+
+export type EventHandler = (event: OpencodeEvent) => void;
+
 export class OpencodeClient {
   private baseUrl: string;
+  private sseAbort: AbortController | null = null;
+  private sseReconnectDelay = 1000;
+  private sseMaxReconnectDelay = 30000;
+  private sseShouldRun = false;
 
   constructor(baseUrl: string) {
     this.baseUrl = baseUrl.replace(/\/$/, '');
@@ -313,6 +325,96 @@ export class OpencodeClient {
     if (!response.ok) return [];
     const data = await response.json();
     return Array.isArray(data) ? data : [];
+  }
+
+  async subscribeEvents(onEvent: EventHandler): Promise<void> {
+    this.sseShouldRun = true;
+    this.sseReconnectDelay = 1000;
+
+    while (this.sseShouldRun) {
+      try {
+        this.sseAbort = new AbortController();
+        const response = await fetch(`${this.baseUrl}/event`, {
+          headers: { Accept: 'text/event-stream' },
+          signal: this.sseAbort.signal
+        });
+
+        if (!response.ok) {
+          throw new Error(`SSE subscribe failed: ${response.status} ${response.statusText}`);
+        }
+
+        const reader = response.body!.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        console.log('[Opencode] SSE /event connected');
+
+        while (this.sseShouldRun) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+
+          for (const line of lines) {
+            if (!line.startsWith('data: ')) continue;
+            const jsonStr = line.slice(6).trim();
+            if (!jsonStr) continue;
+            try {
+              const event = JSON.parse(jsonStr) as OpencodeEvent;
+              onEvent(event);
+            } catch {
+              // partial JSON, ignore
+            }
+          }
+        }
+
+        if (!this.sseShouldRun) break;
+        console.warn('[Opencode] SSE stream ended, reconnecting...');
+      } catch (e: any) {
+        if (e.name === 'AbortError' || !this.sseShouldRun) break;
+        console.error(`[Opencode] SSE error: ${e.message}, reconnecting in ${this.sseReconnectDelay}ms`);
+      }
+
+      if (this.sseShouldRun) {
+        await new Promise(r => setTimeout(r, this.sseReconnectDelay));
+        this.sseReconnectDelay = Math.min(this.sseReconnectDelay * 2, this.sseMaxReconnectDelay);
+      }
+    }
+
+    console.log('[Opencode] SSE subscription stopped');
+  }
+
+  stopEventSubscription(): void {
+    this.sseShouldRun = false;
+    if (this.sseAbort) {
+      this.sseAbort.abort();
+      this.sseAbort = null;
+    }
+  }
+
+  async promptAsync(sessionId: string, text: string, options?: { model?: string; agent?: string }): Promise<void> {
+    const body: any = { parts: [{ type: 'text', text }] };
+    if (options?.model) body.model = options.model;
+    if (options?.agent) body.agent = options.agent;
+
+    const response = await fetch(`${this.baseUrl}/session/${sessionId}/prompt_async`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify(body)
+    });
+
+    if (!response.ok && response.status !== 204) {
+      const errText = await response.text().catch(() => '');
+      throw new Error(`promptAsync failed: ${response.status} ${response.statusText} ${errText}`);
+    }
+  }
+
+  async abortSession(sessionId: string): Promise<void> {
+    const response = await fetch(`${this.baseUrl}/session/${sessionId}/abort`, { method: 'POST' });
+    if (!response.ok) {
+      throw new Error(`abortSession failed: ${response.status} ${response.statusText}`);
+    }
   }
 
   async getConfig(): Promise<any> {

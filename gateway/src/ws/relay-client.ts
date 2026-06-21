@@ -1,7 +1,7 @@
 import WebSocket, { RawData } from 'ws';
 import { randomUUID, randomBytes } from 'crypto';
 import { CryptoManager } from '../crypto/crypto-manager';
-import { OpencodeClient, OpencodePart, OpencodeMessageInfo } from '../opencode/opencode-client';
+import { OpencodeClient, OpencodePart, OpencodeMessageInfo, OpencodeEvent } from '../opencode/opencode-client';
 import { SessionManager } from '../session/session-manager';
 import { OfflineEventBuffer } from '../session/offline-buffer';
 import { GatewayConfig } from '../config';
@@ -22,6 +22,18 @@ export class RelayClient {
   private sessions: SessionManager;
   private offlineBuffer: OfflineEventBuffer = new OfflineEventBuffer();
   private seenMessageIds: Set<string> = new Set();
+  private sseStarted: boolean = false;
+  private isProcessingMessage: boolean = false;
+  private activeStream: {
+    sessionId: string;
+    thinkingId: string;
+    thinkingText: string;
+    replyPartId: string;
+    replyStarted: boolean;
+    assistantMsgId: string | null;
+  } | null = null;
+  private streamResolve: (() => void) | null = null;
+  private streamReject: ((e: any) => void) | null = null;
 
   constructor(config: GatewayConfig) {
     this.config = config;
@@ -146,7 +158,9 @@ export class RelayClient {
         timestamp: Date.now()
       });
 
-      this.initializeFirstSession().catch((e: any) => {
+      this.initializeFirstSession().then(() => {
+        this.startSseSubscription();
+      }).catch((e: any) => {
         console.error('[Relay] Session initialization failed:', e.message);
         this.sendError(`Session initialization failed: ${e.message}`, 'INTERNAL');
       });
@@ -330,28 +344,130 @@ export class RelayClient {
       timestamp: Date.now()
     });
 
+    this.messageQueue = this.messageQueue || [];
+    this.messageQueue.push(message);
+    this.processMessageQueue();
+  }
+
+  private messageQueue: Message[] = [];
+
+  private async processMessageQueue(): Promise<void> {
+    if (this.isProcessingMessage) return;
+    if (this.messageQueue.length === 0) return;
+
+    const session = this.sessions.getActive();
+    if (!session) {
+      this.isProcessingMessage = false;
+      return;
+    }
+
+    this.isProcessingMessage = true;
+    const message = this.messageQueue.shift()!;
+
     try {
       const thinkingId = `thinking_${Date.now()}`;
       this.sendEncryptedMessage({
         type: 'thinking', id: thinkingId, stream: 'start',
         data: { content: '' }, timestamp: Date.now()
       });
-      await this.opencode.sendMessage(session.id, message.data.content, (part, msgInfo) => {
-        this.forwardPartToApp(part, msgInfo, thinkingId);
+
+      this.activeStream = {
+        sessionId: session.id,
+        thinkingId,
+        thinkingText: '',
+        replyPartId: '',
+        replyStarted: false,
+        assistantMsgId: null
+      };
+
+      await new Promise<void>((resolve, reject) => {
+        this.streamResolve = resolve;
+        this.streamReject = reject;
+        this.opencode.promptAsync(session.id, message.data.content).catch(e => {
+          if (this.streamReject) this.streamReject(e);
+        });
       });
+
+      console.log('[Relay] prompt_async stream completed');
     } catch (e: any) {
+      console.error('[Relay] Failed to send message:', e.message);
       this.sendError(`Failed to send message: ${e.message}`, 'INTERNAL');
+    } finally {
+      this.activeStream = null;
+      this.streamResolve = null;
+      this.streamReject = null;
+      this.isProcessingMessage = false;
+      this.processMessageQueue();
     }
   }
 
-  private forwardPartToApp(part: OpencodePart, msgInfo: OpencodeMessageInfo, thinkingId?: string): void {
+  private startSseSubscription(): void {
+    if (this.sseStarted) return;
+    this.sseStarted = true;
+    console.log('[Relay] Starting opencode SSE subscription');
+    this.opencode.subscribeEvents((event) => this.handleSseEvent(event)).catch(e => {
+      console.error('[Relay] SSE subscription error:', e.message);
+      this.sseStarted = false;
+    });
+  }
+
+  private stopSseSubscription(): void {
+    if (!this.sseStarted) return;
+    this.sseStarted = false;
+    this.opencode.stopEventSubscription();
+    console.log('[Relay] Stopped opencode SSE subscription');
+  }
+
+  private abortActiveStream(): void {
+    if (this.activeStream) {
+      if (this.streamReject) this.streamReject(new Error('connection closed'));
+      this.activeStream = null;
+      this.streamResolve = null;
+      this.streamReject = null;
+    }
+    this.isProcessingMessage = false;
+  }
+
+  private handleSseEvent(event: OpencodeEvent): void {
+    const props = event.properties || {};
+    const stream = this.activeStream;
+
+    switch (event.type) {
+      case 'message.part.updated': {
+        const part = props.part as OpencodePart;
+        if (!part) break;
+        this.handlePartUpdated(part, props.messageID || part.messageID);
+        break;
+      }
+      case 'message.part.delta': {
+        if (!stream) break;
+        if (props.sessionID && props.sessionID !== stream.sessionId) break;
+        this.handlePartDelta(props);
+        break;
+      }
+      case 'session.idle': {
+        if (!stream) break;
+        if (props.sessionID && props.sessionID !== stream.sessionId) break;
+        this.completeActiveStream();
+        break;
+      }
+      default:
+        break;
+    }
+  }
+
+  private handlePartUpdated(part: OpencodePart, assistantMsgId: string): void {
+    const stream = this.activeStream;
+    if (!stream) return;
+    if (part.sessionID && part.sessionID !== stream.sessionId) return;
+
     switch (part.type) {
       case 'reasoning': {
         const text = part.text || '';
-        const id = thinkingId || part.id;
-        if (text) {
+        if (text && text !== stream.thinkingText) {
+          stream.thinkingText = text;
           this.sendEncryptedMessage({
-            type: 'thinking', id: id, stream: 'replace',
+            type: 'thinking', id: stream.thinkingId, stream: 'replace',
             data: { content: text }, timestamp: Date.now()
           });
         }
@@ -359,16 +475,19 @@ export class RelayClient {
       }
       case 'text': {
         const text = part.text || '';
-        if (thinkingId) {
+        if (!stream.replyPartId) {
+          stream.replyPartId = part.id;
+          stream.replyStarted = true;
           this.sendEncryptedMessage({
-            type: 'thinking', id: thinkingId, stream: 'end',
-            data: { content: '' }, timestamp: Date.now()
+            type: 'reply', id: part.id, stream: 'start',
+            data: { content: text }, timestamp: Date.now()
+          });
+        } else if (stream.replyPartId === part.id && text) {
+          this.sendEncryptedMessage({
+            type: 'reply', id: part.id, stream: 'replace',
+            data: { content: text }, timestamp: Date.now()
           });
         }
-        this.sendEncryptedMessage({
-          type: 'reply', id: part.id, stream: 'end',
-          data: { content: text }, timestamp: Date.now()
-        });
         break;
       }
       case 'tool':
@@ -390,12 +509,51 @@ export class RelayClient {
       case 'patch':
         this.sendEncryptedMessage({
           type: 'review_url', id: part.id,
-          data: { url: `session/${msgInfo.sessionID}` }, timestamp: Date.now()
+          data: { url: `session/${part.sessionID}` }, timestamp: Date.now()
         });
         break;
       default:
         break;
     }
+  }
+
+  private handlePartDelta(props: any): void {
+    const stream = this.activeStream;
+    if (!stream) return;
+    if (!props.partID) return;
+
+    const delta = props.delta || '';
+    if (!delta) return;
+
+    if (stream.replyPartId === props.partID) {
+      this.sendEncryptedMessage({
+        type: 'reply', id: stream.replyPartId, stream: 'append',
+        data: { content: delta }, timestamp: Date.now()
+      });
+    }
+  }
+
+  private completeActiveStream(): void {
+    const stream = this.activeStream;
+    if (!stream) return;
+
+    if (stream.replyPartId && stream.replyStarted) {
+      this.sendEncryptedMessage({
+        type: 'reply', id: stream.replyPartId, stream: 'end',
+        data: { content: '' }, timestamp: Date.now()
+      });
+      stream.replyStarted = false;
+    }
+
+    this.sendEncryptedMessage({
+      type: 'thinking', id: stream.thinkingId, stream: 'end',
+      data: { content: '' }, timestamp: Date.now()
+    });
+
+    const resolve = this.streamResolve;
+    this.streamResolve = null;
+    this.streamReject = null;
+    if (resolve) resolve();
   }
 
   private async handlePermissionReply(message: Message): Promise<void> {
@@ -478,6 +636,8 @@ export class RelayClient {
   private cleanupConnection(): void {
     this.handshakeState = 'waiting';
     this.seenMessageIds.clear();
+    this.stopSseSubscription();
+    this.abortActiveStream();
   }
 
   private attemptReconnect(): void {
