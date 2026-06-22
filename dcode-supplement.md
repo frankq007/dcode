@@ -281,10 +281,13 @@ sessionKey(32字节) = HKDF-Expand(prk, info=info, L=32)
 - **展示规则**：`已用/上限`，超额时变红提示。
 - **详情浮层**：点击展示 `inputTokens`、`outputTokens`、`total`、`contextWindow`、`占比%`。所有字段必须来自 opencode token 响应，不得臆造（如 `cost($)`——仅当 opencode 未来返回该字段时才展示，当前不显示）。
 
-### 5.4 审查页面 URL 安全（P2）
+### 5.4 审查页面安全（P2）
 
-- **白名单校验**：App 仅允许加载 `opencodeUrl` 同源或 localhost 的 URL，拒绝外部域名。
-- **WebView 配置**：禁用文件访问（`fileFromUrlAccess=false`），按需开启 JS/DOM storage，隔离 cookie。
+> 审查页面采用整页跳转（非浮层），展示文件 diff 列表，点击文件可展开/折叠 diff 内容。
+
+- **整页跳转**：从主会话页菜单进入 `ReviewPage`，`router.pushUrl` 整页跳转，携带 `diffs` 数据，返回按钮关闭。
+- **diff 渲染**：原生组件渲染文件 diff（增删行高亮、文件状态标签），非 WebView。
+- **白名单校验**：若后续引入 WebView 加载外部 URL，仅允许 `opencodeUrl` 同源或 localhost 的 URL，拒绝外部域名。
 - **URL 透传校验**：Gateway 侧校验 review URL 是否以配置的 opencodeUrl 为前缀。
 
 ### 5.5 "大头贴"图片来源（P3）

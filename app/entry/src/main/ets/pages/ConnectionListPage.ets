@@ -10,7 +10,7 @@ import { WX } from '../theme/WXTheme';
 struct ConnectionListPage {
   @State connections: Connection[] = [];
   @State isLoading: boolean = true;
-  @State quickPublicKey: string = 'p4j4BBNcGKp4Q6ogSGwpWzlBAZaKM3y8i/cB5Qto8Dg=';
+  @State quickPublicKey: string = 'EHWxpi6m9cbgoG/tDKwdhaPP2pvjnL/v6Mr1rYmGeSU=';
   @State quickToken: string = 'dcode-dev-token-0001';
 
   aboutToAppear() {
@@ -106,7 +106,7 @@ struct ConnectionListPage {
               .backgroundColor(WX.GREEN)
               .borderRadius(WX.RADIUS_SM)
               .onClick(() => {
-                const qrData: string = '{"mode":"direct","name":"MyPC","host":"10.0.2.2","port":8765,"publicKey":"p4j4BBNcGKp4Q6ogSGwpWzlBAZaKM3y8i/cB5Qto8Dg=","token":"dcode-dev-token-0001"}';
+                const qrData: string = '{"mode":"direct","name":"MyPC","host":"10.0.2.2","port":8765,"publicKey":"EHWxpi6m9cbgoG/tDKwdhaPP2pvjnL/v6Mr1rYmGeSU=","token":"dcode-dev-token-0001"}';
                 router.pushUrl({ url: 'pages/ChatPage', params: { qrData: qrData } });
               })
           }

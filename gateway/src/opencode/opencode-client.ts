@@ -116,6 +116,20 @@ export class OpencodeClient {
     return Array.isArray(data) ? data : [];
   }
 
+  async getDiffs(sessionId: string): Promise<any[]> {
+    const messages = await this.getMessages(sessionId);
+    const allDiffs: any[] = [];
+    for (const msg of messages) {
+      const summary = (msg.info as any)?.summary;
+      if (summary && Array.isArray(summary.diffs)) {
+        for (const d of summary.diffs) {
+          allDiffs.push(d);
+        }
+      }
+    }
+    return allDiffs;
+  }
+
   async sendMessage(sessionId: string, text: string, onPart?: PartHandler): Promise<OpencodeMessage> {
     const response = await fetch(`${this.baseUrl}/session/${sessionId}/message?subscribe=true`, {
       method: 'POST',

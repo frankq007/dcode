@@ -66,6 +66,29 @@ cscript //nologo start_gateway.vbs
 - To restart: kill the old process first, then re-run the VBS. The app will
   auto-reconnect via its reconnection logic.
 
+## File Encoding
+
+Markdown and documentation files in this repo use **UTF-8** encoding. Some files
+have a BOM, some do not — be aware when editing:
+
+- **UTF-8 with BOM** (`EF BB BF`): `AGENTS.md`, `IMPLEMENTATION_STATUS.md`, `dcode.md`
+- **UTF-8 no BOM**: `IMPLEMENTATION_PLAN.md`, `dcode-supplement.md`, `README.md`
+
+**PowerShell 5.1 caveat**: The console default code page is GBK (936), so
+`Get-Content` / `Write-Output` may display UTF-8 Chinese as mojibake (`????`).
+This is a display issue only — the file content is correct. To verify, use the
+Read tool or check bytes directly:
+
+```powershell
+$bytes = [System.IO.File]::ReadAllBytes($path)
+if ($bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
+    'UTF-8 with BOM'
+} else { 'UTF-8 no BOM' }
+```
+
+When writing Chinese content via PowerShell, always use `[System.IO.File]::WriteAllText()`
+with an explicit `UTF8Encoding` to avoid encoding corruption.
+
 ## Coding Style & Naming Conventions
 
 **TypeScript (gateway/relay)**:

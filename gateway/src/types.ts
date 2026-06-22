@@ -8,6 +8,7 @@
   | 'permission_reply'
   | 'reply'
   | 'review_url'
+  | 'review_query'
   | 'session_list'
   | 'session_switch'
   | 'session_create'

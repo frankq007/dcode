@@ -40,6 +40,7 @@ export type MessageType =
   | 'permission_reply'
   | 'reply'
   | 'review_url'
+  | 'review_query'
   | 'session_list'
   | 'session_switch'
   | 'session_create'
@@ -57,6 +58,14 @@ export interface ToolCallItem {
   result?: string;
 }
 
+export interface FileDiff {
+  file: string;
+  patch: string;
+  additions: number;
+  deletions: number;
+  status: string;
+}
+
 export interface MessageData {
   content?: string;
   name?: string;
@@ -64,13 +73,14 @@ export interface MessageData {
   parameters?: string | object;
   result?: string;
   tools?: ToolCallItem[];
+  diffs?: FileDiff[];
+  sessionId?: string;
   description?: string;
   requestId?: string;
   allowed?: boolean;
   reason?: string;
   url?: string;
   sessions?: Session[];
-  sessionId?: string;
   isActive?: boolean;
   createdAt?: number;
   lastActivity?: number;

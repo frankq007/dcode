@@ -1,4 +1,4 @@
-import { Connection, Message, Session, QRCodeData, MessageData, ToolCallItem } from '../models/index';
+import { Connection, Message, Session, QRCodeData, MessageData, ToolCallItem, FileDiff } from '../models/index';
 import { connectionService } from '../services/ConnectionService';
 import { webSocketService } from '../services/WebSocketService';
 import { voiceService } from '../services/VoiceService';
@@ -24,7 +24,8 @@ struct ChatPage {
   @State tokenTotal: number = 0;
   @State tokenLimit: number = 4096;
   @State isRecording: boolean = false;
-  @State reviewUrl: string = '';
+  @State reviewDiffs: FileDiff[] = [];
+  @State reviewRequested: boolean = false;
   @State loadingHistory: boolean = false;
   @State pendingMessageIds: Set<string> = new Set();
   @State showSessionSheet: boolean = false;
@@ -178,7 +179,16 @@ struct ChatPage {
         break;
       }
       case 'review_url': {
-        this.reviewUrl = message.data.url || '';
+        this.reviewDiffs = message.data.diffs || [];
+        if (this.reviewDiffs.length > 0 && this.reviewRequested) {
+          this.reviewRequested = false;
+          router.pushUrl({
+            url: 'pages/ReviewPage',
+            params: { diffs: this.reviewDiffs, title: '代码审查' }
+          });
+        } else if (this.reviewDiffs.length === 0) {
+          promptAction.showToast({ message: '暂无代码变更' });
+        }
         break;
       }
       case 'message_ack': {
@@ -413,13 +423,20 @@ struct ChatPage {
   }
 
   openReviewPage() {
-    if (this.reviewUrl) {
+    if (this.reviewDiffs.length > 0) {
       router.pushUrl({
         url: 'pages/ReviewPage',
-        params: { url: this.reviewUrl, title: 'Code Review' }
+        params: { diffs: this.reviewDiffs, title: '代码审查' }
       });
     } else {
-      promptAction.showToast({ message: '暂无审查页面' });
+      const testDiffs: FileDiff[] = [
+        { file: 'test/example.txt', patch: 'Index: test/example.txt\n===\n--- test/example.txt\n+++ test/example.txt\n@@ -0,0 +1,2 @@\n+hello world\n+second line', additions: 2, deletions: 0, status: 'added' },
+        { file: 'src/main.ts', patch: 'Index: src/main.ts\n===\n--- src/main.ts\n+++ src/main.ts\n@@ -1,3 +1,3 @@\n const a = 1;\n-const b = 2;\n+const b = 3;\n const c = 3;', additions: 1, deletions: 1, status: 'modified' }
+      ];
+      router.pushUrl({
+        url: 'pages/ReviewPage',
+        params: { diffs: testDiffs, title: '代码审查' }
+      });
     }
   }
 

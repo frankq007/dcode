@@ -301,6 +301,31 @@ export class DirectServer {
       case 'token_query':
         this.handleTokenQuery();
         break;
+      case 'review_query': {
+        const session = this.sessions.getActive();
+        if (session) {
+          (async () => {
+            try {
+              const diffs = await this.opencode.getDiffs(session.opencodeId);
+              this.sendEncryptedMessage({
+                type: 'review_url',
+                id: randomUUID(),
+                data: { sessionId: session.opencodeId, diffs },
+                timestamp: Date.now()
+              });
+            } catch (e: any) {
+              console.error('[Direct] Failed to fetch diffs:', e.message);
+              this.sendEncryptedMessage({
+                type: 'review_url',
+                id: randomUUID(),
+                data: { sessionId: session.opencodeId, diffs: [] },
+                timestamp: Date.now()
+              });
+            }
+          })();
+        }
+        break;
+      }
       case 'sync':
         this.handleSync(message);
         break;
@@ -497,6 +522,10 @@ export class DirectServer {
         const part = props.part as OpencodePart;
         if (!part) break;
         if (part.sessionID && part.sessionID !== stream.sessionId) break;
+        if (part.type === 'patch') {
+          this.handlePartUpdated(part);
+          break;
+        }
         if (part.messageID !== stream.assistantMsgId) break;
         this.handlePartUpdated(part);
         break;
@@ -586,14 +615,29 @@ export class DirectServer {
           });
         }
         break;
-      case 'patch':
-        this.sendEncryptedMessage({
-          type: 'review_url',
-          id: part.id,
-          data: { url: `session/${part.sessionID}` },
-          timestamp: Date.now()
-        });
+      case 'patch': {
+        const patchSessionId = part.sessionID;
+        (async () => {
+          try {
+            const diffs = await this.opencode.getDiffs(patchSessionId);
+            this.sendEncryptedMessage({
+              type: 'review_url',
+              id: part.id,
+              data: { sessionId: patchSessionId, diffs: diffs },
+              timestamp: Date.now()
+            });
+          } catch (e: any) {
+            console.error('[Direct] Failed to fetch diffs:', e.message);
+            this.sendEncryptedMessage({
+              type: 'review_url',
+              id: part.id,
+              data: { sessionId: patchSessionId, diffs: [] },
+              timestamp: Date.now()
+            });
+          }
+        })();
         break;
+      }
       default:
         break;
     }
