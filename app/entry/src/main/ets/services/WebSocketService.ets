@@ -43,6 +43,7 @@ interface ParsedMessage {
   version?: string;
   iv?: string;
   ciphertext?: string;
+  reason?: string;
   data?: ErrorData;
 }
 
@@ -72,6 +73,8 @@ export class WebSocketService {
   private readonly HEARTBEAT_INTERVAL_FOREGROUND: number = 10000;
   private readonly HEARTBEAT_INTERVAL_BACKGROUND: number = 120000;
   private readonly HEARTBEAT_TIMEOUT: number = 20000;
+  private readonly PAIRING_TIMEOUT: number = 30000;
+  private relayPairingTimeoutTimer: number | null = null;
 
   async connect(qrData: QRCodeData): Promise<void> {
     if (qrData.expiresAt && qrData.expiresAt > 0 && Date.now() > qrData.expiresAt) {
@@ -95,7 +98,7 @@ export class WebSocketService {
   private async doConnect(qrData: QRCodeData): Promise<void> {
     const url = qrData.mode === 'relay' && qrData.relayUrl
       ? qrData.relayUrl
-      : `ws://${qrData.host}:${qrData.port}`;
+      : `ws://${qrData.host || ''}:${qrData.port || 0}`;
 
     console.log(`[WebSocket] Connecting to ${url}`);
 
@@ -107,7 +110,11 @@ export class WebSocketService {
         this.isConnected = true;
         this.reconnectAttempts = 0;
         this.reconnectDelay = 1000;
-        this.startHandshake(qrData);
+        if (qrData.mode === 'relay') {
+          this.startRelayPairing(qrData);
+        } else {
+          this.startHandshake(qrData);
+        }
       });
 
       this.ws.on('message', (_err: Error, value: string | ArrayBuffer) => {
@@ -119,6 +126,10 @@ export class WebSocketService {
         this.isConnected = false;
         this.handshakeComplete = false;
         this.handshakeState = 'idle';
+        if (this.relayPairingTimeoutTimer) {
+          clearTimeout(this.relayPairingTimeoutTimer);
+          this.relayPairingTimeoutTimer = null;
+        }
         this.stopHeartbeat();
         this.notifyConnectionListeners(false);
         this.attemptReconnect();
@@ -138,6 +149,31 @@ export class WebSocketService {
     }
   }
 
+  private startRelayPairing(qrData: QRCodeData): void {
+    const registerMsg = {
+      type: 'register',
+      token: qrData.token,
+      role: 'app',
+      version: APP_VERSION,
+      relayKey: qrData.relayKey
+    };
+    this.ws?.send(JSON.stringify(registerMsg));
+    console.log(`[WebSocket] Sent relay register (token=${qrData.token.substring(0, 8)}...)`);
+
+    this.relayPairingTimeoutTimer = setTimeout(() => {
+      this.relayPairingTimeoutTimer = null;
+      console.error('[WebSocket] Relay pairing timeout');
+      const errorMsg: Message = {
+        type: 'error',
+        id: '',
+        data: { message: '配对超时，请确认网关已启动并刷新二维码重试', code: 'PAIRING_TIMEOUT' },
+        timestamp: Date.now()
+      };
+      this.notifyMessageListeners(errorMsg);
+      this.ws?.close();
+    }, this.PAIRING_TIMEOUT);
+  }
+
   private async startHandshake(qrData: QRCodeData): Promise<void> {
     console.log('[WebSocket] Starting ECDH handshake');
 
@@ -149,7 +185,7 @@ export class WebSocketService {
         type: 'handshake_init',
         publicKey: this.crypto.getPublicKeyBase64(),
         nonce: this.appNonce,
-        token: 'dcode-dev-token-0001',
+        token: qrData.token,
         version: APP_VERSION
       };
 
@@ -196,8 +232,36 @@ export class WebSocketService {
         this.notifyMessageListeners(errorMsg);
       } else if (parsed.type === 'paired') {
         console.log('[WebSocket] Paired via relay');
+        if (this.relayPairingTimeoutTimer) {
+          clearTimeout(this.relayPairingTimeoutTimer);
+          this.relayPairingTimeoutTimer = null;
+        }
+        if (this.handshakeState === 'idle' && this.lastQrData) {
+          this.startHandshake(this.lastQrData);
+        }
+      } else if (parsed.type === 'peer_disconnected') {
+        if (parsed.reason === 'replaced') {
+          console.log('[WebSocket] Replaced by another device');
+          this.reconnectAttempts = this.maxReconnectAttempts;
+          const replacedMsg: Message = {
+            type: 'error',
+            id: '',
+            data: { message: '被其他设备取代', code: 'REPLACED' },
+            timestamp: Date.now()
+          };
+          this.notifyMessageListeners(replacedMsg);
+        } else {
+          console.log('[WebSocket] Peer disconnected');
+        }
       } else if (parsed.type === 'waiting') {
         console.log('[WebSocket] Waiting for gateway...');
+        const waitingMsg: Message = {
+          type: 'error',
+          id: '',
+          data: { message: '正在等待网关连接...', code: 'WAITING' },
+          timestamp: Date.now()
+        };
+        this.notifyMessageListeners(waitingMsg);
       } else {
         console.warn('[WebSocket] Unhandled message type:', parsed.type);
       }
@@ -291,6 +355,11 @@ export class WebSocketService {
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
+    }
+
+    if (this.relayPairingTimeoutTimer) {
+      clearTimeout(this.relayPairingTimeoutTimer);
+      this.relayPairingTimeoutTimer = null;
     }
 
     this.stopHeartbeat();

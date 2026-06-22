@@ -23,8 +23,11 @@ export class RelayServer {
   private readonly RATE_LIMIT_WINDOW = 60000;
   private readonly HEARTBEAT_INTERVAL = 30000;
   private readonly HEARTBEAT_TIMEOUT = 90000;
+  private readonly PENDING_TIMEOUT = 60000;
+  private relayKey: string | undefined;
 
-  constructor(private port: number = 8766) {
+  constructor(private port: number = 8766, relayKey?: string) {
+    this.relayKey = relayKey || process.env.DCODE_RELAY_KEY || undefined;
     this.wss = new WebSocketServer({ port: this.port });
     this.setupServer();
     this.startHeartbeatCheck();
@@ -77,10 +80,17 @@ export class RelayServer {
   }
 
   private handleRegistration(ws: WebSocket, message: any): void {
-    const { token, role } = message;
+    const { token, role, relayKey } = message;
 
     if (!token || !role || !['gateway', 'app'].includes(role)) {
       this.sendError(ws, 'Invalid registration: missing token or role');
+      return;
+    }
+
+    if (this.relayKey && relayKey !== this.relayKey) {
+      console.warn('[Relay] Unauthorized registration: relayKey mismatch');
+      this.sendError(ws, 'Unauthorized');
+      ws.close();
       return;
     }
 
@@ -112,17 +122,46 @@ export class RelayServer {
         this.pendingClients.delete(token);
       }
 
-      const pairedMessage = JSON.stringify({ type: 'paired', token });
-      session.gateway.ws.send(pairedMessage);
-      session.app.ws.send(pairedMessage);
-
+      this.notifyPaired(session);
       console.log(`[Relay] Session paired: token=${token.substring(0, 8)}...`);
-    } else {
-      pending.push(client);
-      this.pendingClients.set(token, pending);
+      return;
+    }
 
-      const waitingMessage = JSON.stringify({ type: 'waiting', token });
-      ws.send(waitingMessage);
+    // No pending peer. When an app registers, a gateway may already be paired
+    // in an active session with a (now stale) app — e.g. the previous app's
+    // socket died silently. Let this app take over the app side of that session
+    // so it pairs immediately instead of waiting forever.
+    if (role === 'app') {
+      const activeSession = this.activeSessions.get(token);
+      if (activeSession) {
+        const oldApp = activeSession.app;
+        if (oldApp && oldApp.ws.readyState === WebSocket.OPEN) {
+          oldApp.ws.send(JSON.stringify({ type: 'peer_disconnected', reason: 'replaced' }));
+          console.log(`[Relay] Old app replaced: token=${token.substring(0, 8)}...`);
+          oldApp.ws.close();
+        }
+        activeSession.app = client;
+        this.notifyPaired(activeSession);
+        console.log(`[Relay] App rejoined active session: token=${token.substring(0, 8)}...`);
+        return;
+      }
+    }
+
+    pending.push(client);
+    this.pendingClients.set(token, pending);
+
+    const waitingMessage = JSON.stringify({ type: 'waiting', token });
+    ws.send(waitingMessage);
+  }
+
+  private notifyPaired(session: PairedSession): void {
+    const token = session.gateway.token;
+    const pairedMessage = JSON.stringify({ type: 'paired', token });
+    if (session.gateway.ws.readyState === WebSocket.OPEN) {
+      session.gateway.ws.send(pairedMessage);
+    }
+    if (session.app.ws.readyState === WebSocket.OPEN) {
+      session.app.ws.send(pairedMessage);
     }
   }
 
@@ -201,7 +240,7 @@ export class RelayServer {
       const now = Date.now();
 
       for (const [token, clients] of this.pendingClients.entries()) {
-        const stale = clients.filter(c => now - c.lastHeartbeat > this.HEARTBEAT_TIMEOUT);
+        const stale = clients.filter(c => now - c.lastHeartbeat > this.PENDING_TIMEOUT);
         for (const client of stale) {
           console.log(`[Relay] Timeout: pending client token=${token.substring(0, 8)}...`);
           client.ws.close();

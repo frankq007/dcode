@@ -62,7 +62,9 @@ export class RelayClient {
       const registerMsg = {
         type: 'register',
         token: this.token,
-        role: 'gateway'
+        role: 'gateway',
+        version: this.config.version,
+        relayKey: this.config.relayKey
       };
       
       this.ws?.send(JSON.stringify(registerMsg));
@@ -99,7 +101,12 @@ export class RelayClient {
     } else if (parsed.type === 'paired') {
       console.log('[Relay] Paired with app');
     } else if (parsed.type === 'peer_disconnected') {
-      console.log('[Relay] App disconnected');
+      if (parsed.reason === 'replaced') {
+        console.log('[Relay] Replaced by another device, stopping reconnection');
+        this.reconnectAttempts = this.maxReconnectAttempts;
+      } else {
+        console.log('[Relay] App disconnected');
+      }
       this.cleanupConnection();
     } else if (this.handshakeState === 'complete') {
       this.handleEncryptedMessage(parsed);
@@ -269,17 +276,17 @@ export class RelayClient {
         if (session) {
           (async () => {
             try {
-              const diffs = await this.opencode.getDiffs(session.opencodeId);
+              const diffs = await this.opencode.getDiffs(session.id);
               this.sendEncryptedMessage({
                 type: 'review_url', id: randomUUID(),
-                data: { sessionId: session.opencodeId, diffs },
+                data: { sessionId: session.id, diffs },
                 timestamp: Date.now()
               });
             } catch (e: any) {
               console.error('[Relay] Failed to fetch diffs:', e.message);
               this.sendEncryptedMessage({
                 type: 'review_url', id: randomUUID(),
-                data: { sessionId: session.opencodeId, diffs: [] },
+                data: { sessionId: session.id, diffs: [] },
                 timestamp: Date.now()
               });
             }
@@ -739,11 +746,11 @@ export class RelayClient {
     const qrData: QRCodeData = {
       mode: 'relay',
       name: this.config.computerName,
-      host: this.config.host,
-      port: this.config.port,
       publicKey: this.crypto.getPublicKeyBase64(),
       token: this.token,
-      relayUrl: this.config.relayUrl
+      expiresAt: Date.now() + 10 * 60 * 1000,
+      relayUrl: this.config.relayUrl,
+      relayKey: this.config.relayKey
     };
 
     const qrString = JSON.stringify(qrData);

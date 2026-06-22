@@ -306,19 +306,17 @@ export class DirectServer {
         if (session) {
           (async () => {
             try {
-              const diffs = await this.opencode.getDiffs(session.opencodeId);
+              const diffs = await this.opencode.getDiffs(session.id);
               this.sendEncryptedMessage({
-                type: 'review_url',
-                id: randomUUID(),
-                data: { sessionId: session.opencodeId, diffs },
+                type: 'review_url', id: randomUUID(),
+                data: { sessionId: session.id, diffs },
                 timestamp: Date.now()
               });
             } catch (e: any) {
               console.error('[Direct] Failed to fetch diffs:', e.message);
               this.sendEncryptedMessage({
-                type: 'review_url',
-                id: randomUUID(),
-                data: { sessionId: session.opencodeId, diffs: [] },
+                type: 'review_url', id: randomUUID(),
+                data: { sessionId: session.id, diffs: [] },
                 timestamp: Date.now()
               });
             }

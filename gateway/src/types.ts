@@ -43,8 +43,8 @@ export interface HandshakeMessage {
 export interface QRCodeData {
   mode: 'direct' | 'relay';
   name: string;
-  host: string;
-  port: number;
+  host?: string;
+  port?: number;
   publicKey: string;
   token: string;
   expiresAt?: number;
