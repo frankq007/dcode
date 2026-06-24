@@ -7,6 +7,13 @@ import { SessionManager } from '../session/session-manager';
 import { OfflineEventBuffer } from '../session/offline-buffer';
 import { GatewayConfig } from '../config';
 import { HandshakeMessage, Message, QRCodeData } from '../types';
+import { chunkMessage, reassembleMessage, buildChunkEnvelope, DEFAULT_MAX_MESSAGE_SIZE } from '../utils/chunker';
+
+interface PendingChunks {
+  chunks: (string | null)[];
+  total: number;
+  timer: NodeJS.Timeout | null;
+}
 
 export class DirectServer {
   private wss: WebSocketServer;
@@ -19,7 +26,9 @@ export class DirectServer {
   private sessions: SessionManager;
   private offlineBuffer: OfflineEventBuffer = new OfflineEventBuffer();
   private seenMessageIds: Set<string> = new Set();
-  private maxMessageSize = 1024 * 1024; // 1MB
+  private chunkBuffer: Map<string, PendingChunks> = new Map();
+  private readonly CHUNK_REASSEMBLY_TIMEOUT = 30000;
+  private maxMessageSize = DEFAULT_MAX_MESSAGE_SIZE;
   private pendingSyncSeq: number = -1;
   private sessionInitDone: boolean = false;
   private pingTimer: NodeJS.Timeout | null = null;
@@ -90,6 +99,7 @@ export class DirectServer {
       this.appWs = null;
       this.handshakeState = 'waiting';
       this.seenMessageIds.clear();
+      this.clearChunkBuffer();
       if (this.pingTimer) {
         clearInterval(this.pingTimer);
         this.pingTimer = null;
@@ -112,10 +122,14 @@ export class DirectServer {
   private handleAppMessage(ws: WebSocket, data: RawData): void {
     if (this.handshakeState === 'complete') {
       try {
-        const encrypted = JSON.parse(data.toString());
-        const decrypted = this.crypto.decrypt(encrypted);
-        const message = JSON.parse(decrypted);
-        this.processDecryptedMessage(message);
+        const parsed = JSON.parse(data.toString());
+        if (parsed.type === 'chunk') {
+          this.handleChunk(parsed);
+        } else {
+          const decrypted = this.crypto.decrypt(parsed);
+          const message = JSON.parse(decrypted);
+          this.processDecryptedMessage(message);
+        }
       } catch (e: any) {
         console.error('[Direct] Decryption/parse error:', e.message);
         this.sendError('Data parse error', 'BAD_FRAME');
@@ -757,34 +771,71 @@ export class DirectServer {
     }
 
     const plaintext = JSON.stringify(message);
-    const chunks = this.chunkMessage(plaintext);
-    
-    for (const chunk of chunks) {
-      const encrypted = this.crypto.encrypt(chunk);
-      this.appWs.send(JSON.stringify(encrypted));
+    const encrypted = this.crypto.encrypt(plaintext);
+    const frame = JSON.stringify(encrypted);
+    const chunks = chunkMessage(frame, this.maxMessageSize);
+
+    if (chunks.length === 1) {
+      this.appWs.send(frame);
+    } else {
+      const messageId = randomUUID();
+      for (let i = 0; i < chunks.length; i++) {
+        const envelope = buildChunkEnvelope(messageId, i, chunks.length, chunks[i]);
+        this.appWs.send(JSON.stringify(envelope));
+      }
     }
-    console.log(`[Direct] Sent to app: type=${message.type} stream=${message.stream ?? '-'} seq=${message.seq ?? '-'}`);
+    console.log(`[Direct] Sent to app: type=${message.type} stream=${message.stream ?? '-'} seq=${message.seq ?? '-'} chunks=${chunks.length}`);
   }
 
-  private chunkMessage(plaintext: string): string[] {
-    const encoder = new TextEncoder();
-    const encoded = encoder.encode(plaintext);
-    
-    if (encoded.length <= this.maxMessageSize) {
-      return [plaintext];
+  private handleChunk(chunk: any): void {
+    const { messageId, index, total, data } = chunk;
+    if (!messageId || typeof index !== 'number' || typeof total !== 'number' || typeof data !== 'string') {
+      console.warn('[Direct] Invalid chunk received, ignoring');
+      return;
     }
-    
-    const chunks: string[] = [];
-    const decoder = new TextDecoder();
-    let offset = 0;
-    
-    while (offset < encoded.length) {
-      const end = Math.min(offset + this.maxMessageSize, encoded.length);
-      chunks.push(decoder.decode(encoded.slice(offset, end)));
-      offset = end;
+    if (index < 0 || index >= total || total <= 0) {
+      console.warn(`[Direct] Chunk out of range: index=${index} total=${total}`);
+      return;
     }
-    
-    return chunks;
+
+    let entry = this.chunkBuffer.get(messageId);
+    if (!entry) {
+      entry = { chunks: new Array(total).fill(null), total, timer: null };
+      entry.timer = setTimeout(() => {
+        console.warn(`[Direct] Chunk reassembly timeout for messageId=${messageId}, discarding`);
+        this.chunkBuffer.delete(messageId);
+      }, this.CHUNK_REASSEMBLY_TIMEOUT);
+      this.chunkBuffer.set(messageId, entry);
+    }
+
+    if (entry.total !== total) {
+      console.warn(`[Direct] Chunk total mismatch for messageId=${messageId}: ${entry.total} vs ${total}`);
+      return;
+    }
+
+    entry.chunks[index] = data;
+
+    if (entry.chunks.every(c => c !== null)) {
+      if (entry.timer) clearTimeout(entry.timer);
+      this.chunkBuffer.delete(messageId);
+      const frame = reassembleMessage(entry.chunks as string[]);
+      try {
+        const encrypted = JSON.parse(frame);
+        const decrypted = this.crypto.decrypt(encrypted);
+        const message = JSON.parse(decrypted);
+        this.processDecryptedMessage(message);
+      } catch (e: any) {
+        console.error('[Direct] Chunk reassembly/decrypt error:', e.message);
+        this.sendError('Chunk parse error', 'BAD_FRAME');
+      }
+    }
+  }
+
+  private clearChunkBuffer(): void {
+    for (const [, entry] of this.chunkBuffer) {
+      if (entry.timer) clearTimeout(entry.timer);
+    }
+    this.chunkBuffer.clear();
   }
 
   private sendError(message: string, code: string = 'INTERNAL'): void {

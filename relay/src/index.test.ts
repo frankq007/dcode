@@ -1,4 +1,4 @@
-﻿import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+﻿import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { WebSocket } from 'ws';
 import { RelayServer as RS } from './index';
 
@@ -309,48 +309,80 @@ describe('Relay Server', () => {
     });
   }, 10000);
 
-  it('should clean up pending clients after 60s (R2.5)', async () => {
-    // Let connections from previous tests fully close
-    await new Promise(resolve => setTimeout(resolve, 200));
-
-    vi.useFakeTimers({ toFake: ['setTimeout', 'setInterval', 'Date'] });
-    vi.clearAllTimers();
-    server = new RS(TEST_PORT);
+  it('should clean up pending clients after 60s (R2.5)', (done) => {
+    // Use a short pending timeout + heartbeat interval to simulate without waiting 60s
+    server = new RS(TEST_PORT, { pendingTimeout: 300, heartbeatInterval: 100 });
 
     const token = 'pending-timeout-token';
     const gatewayWs = new WebSocket(`ws://localhost:${TEST_PORT}`);
 
     let gotWaiting = false;
+    let closed = false;
+
     gatewayWs.on('message', (data: any) => {
       const msg = JSON.parse(data.toString());
       if (msg.type === 'waiting') gotWaiting = true;
     });
+
     gatewayWs.on('open', () => {
       gatewayWs.send(JSON.stringify({ type: 'register', token, role: 'gateway' }));
     });
 
-    // Advance fake timers while yielding to real I/O so the connection can open
-    for (let i = 0; i < 50 && !gotWaiting; i++) {
-      await vi.advanceTimersByTimeAsync(100);
-      await new Promise(resolve => setImmediate(resolve));
-    }
-    expect(gotWaiting).toBe(true);
-
-    const closed = new Promise<void>((resolve) => {
-      gatewayWs.on('close', () => resolve());
+    gatewayWs.on('close', () => {
+      closed = true;
+      expect(gotWaiting).toBe(true);
+      done();
     });
 
-    // Advance past 60s pending timeout; heartbeat checks at 30s/60s/90s
-    for (let i = 0; i < 50 && gatewayWs.readyState !== WebSocket.CLOSED; i++) {
-      await vi.advanceTimersByTimeAsync(2000);
-      await new Promise(resolve => setImmediate(resolve));
-    }
-    await closed;
+    // Safety timeout - should be cleaned up well before this
+    setTimeout(() => {
+      if (!closed) {
+        done(new Error('Pending client was not cleaned up within timeout'));
+      }
+    }, 5000);
+  }, 10000);
 
-    expect(gatewayWs.readyState).toBe(WebSocket.CLOSED);
+  it('should transparently forward large messages >1MB between paired clients (G3)', (done) => {
+    server = new RS(TEST_PORT);
 
-    vi.useRealTimers();
-    vi.clearAllTimers();
-    gatewayWs.close();
+    const token = 'large-msg-token';
+    // Build a payload larger than 1MB (the gateway chunk threshold). The relay
+    // must forward it untouched without inspecting or rejecting the content.
+    const largeContent = 'A'.repeat(2 * 1024 * 1024); // 2MB
+    const payload = JSON.stringify({ type: 'big_message', content: largeContent });
+
+    const gatewayWs = new WebSocket(`ws://localhost:${TEST_PORT}`);
+    let appWs: WebSocket;
+
+    gatewayWs.on('open', () => {
+      gatewayWs.send(JSON.stringify({ type: 'register', token, role: 'gateway' }));
+    });
+
+    gatewayWs.on('message', (data: any) => {
+      const msg = JSON.parse(data.toString());
+
+      if (msg.type === 'waiting') {
+        appWs = new WebSocket(`ws://localhost:${TEST_PORT}`);
+
+        appWs.on('open', () => {
+          appWs.send(JSON.stringify({ type: 'register', token, role: 'app' }));
+        });
+
+        appWs.on('message', (d: any) => {
+          const appMsg = JSON.parse(d.toString());
+          if (appMsg.type === 'paired') {
+            // Send the large payload from gateway to app via relay
+            gatewayWs.send(payload);
+          } else if (appMsg.type === 'big_message') {
+            // Relay forwarded the full large message untouched
+            expect(appMsg.content).toBe(largeContent);
+            expect(appMsg.content.length).toBe(2 * 1024 * 1024);
+            gatewayWs.close();
+            appWs.close();
+            done();
+          }
+        });
+      }
+    });
   }, 15000);
 });

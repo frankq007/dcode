@@ -14,10 +14,14 @@ permission:
   bash:
     "devecocli *": allow
     "hdc *": allow
+    "npm *": allow
+    "npx *": allow
     "cat *": allow
     "ls *": allow
     "find *": allow
     "grep *": allow
+    "cd *": allow
+    "git *": allow
     "*": deny
 ---
 

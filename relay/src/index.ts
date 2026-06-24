@@ -13,6 +13,12 @@ interface PairedSession {
   app: RegisteredClient;
 }
 
+export interface RelayServerOptions {
+  relayKey?: string;
+  pendingTimeout?: number;
+  heartbeatInterval?: number;
+}
+
 export class RelayServer {
   private wss: WebSocketServer;
   private pendingClients: Map<string, RegisteredClient[]> = new Map();
@@ -21,13 +27,19 @@ export class RelayServer {
   private messageCounts: Map<WebSocket, { count: number; resetAt: number }> = new Map();
   private readonly RATE_LIMIT = 100;
   private readonly RATE_LIMIT_WINDOW = 60000;
-  private readonly HEARTBEAT_INTERVAL = 30000;
+  private readonly HEARTBEAT_INTERVAL: number;
   private readonly HEARTBEAT_TIMEOUT = 90000;
-  private readonly PENDING_TIMEOUT = 60000;
+  private readonly PENDING_TIMEOUT: number;
   private relayKey: string | undefined;
 
-  constructor(private port: number = 8766, relayKey?: string) {
-    this.relayKey = relayKey || process.env.DCODE_RELAY_KEY || undefined;
+  constructor(private port: number = 8766, options?: string | RelayServerOptions) {
+    const opts: RelayServerOptions = typeof options === 'string'
+      ? { relayKey: options }
+      : (options || {});
+
+    this.relayKey = opts.relayKey || process.env.DCODE_RELAY_KEY || undefined;
+    this.PENDING_TIMEOUT = opts.pendingTimeout ?? 60000;
+    this.HEARTBEAT_INTERVAL = opts.heartbeatInterval ?? 30000;
     this.wss = new WebSocketServer({ port: this.port });
     this.setupServer();
     this.startHeartbeatCheck();

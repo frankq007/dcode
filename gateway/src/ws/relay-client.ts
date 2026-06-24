@@ -6,6 +6,13 @@ import { SessionManager } from '../session/session-manager';
 import { OfflineEventBuffer } from '../session/offline-buffer';
 import { GatewayConfig } from '../config';
 import { HandshakeMessage, Message, QRCodeData } from '../types';
+import { chunkMessage, reassembleMessage, buildChunkEnvelope, DEFAULT_MAX_MESSAGE_SIZE } from '../utils/chunker';
+
+interface PendingChunks {
+  chunks: (string | null)[];
+  total: number;
+  timer: NodeJS.Timeout | null;
+}
 
 export class RelayClient {
   private ws: WebSocket | null = null;
@@ -22,6 +29,9 @@ export class RelayClient {
   private sessions: SessionManager;
   private offlineBuffer: OfflineEventBuffer = new OfflineEventBuffer();
   private seenMessageIds: Set<string> = new Set();
+  private chunkBuffer: Map<string, PendingChunks> = new Map();
+  private readonly CHUNK_REASSEMBLY_TIMEOUT = 30000;
+  private maxMessageSize: number;
   private sseStarted: boolean = false;
   private isProcessingMessage: boolean = false;
   private activeStream: {
@@ -42,6 +52,7 @@ export class RelayClient {
     this.token = config.token || randomUUID();
     this.opencode = new OpencodeClient(config.opencodeUrl);
     this.sessions = new SessionManager();
+    this.maxMessageSize = config.maxMessageSize ?? DEFAULT_MAX_MESSAGE_SIZE;
   }
 
   start(): void {
@@ -109,7 +120,11 @@ export class RelayClient {
       }
       this.cleanupConnection();
     } else if (this.handshakeState === 'complete') {
-      this.handleEncryptedMessage(parsed);
+      if (parsed.type === 'chunk') {
+        this.handleChunk(parsed);
+      } else {
+        this.handleEncryptedMessage(parsed);
+      }
     } else {
       this.handleHandshakeMessage(parsed);
     }
@@ -704,7 +719,69 @@ export class RelayClient {
 
     const plaintext = JSON.stringify(message);
     const encrypted = this.crypto.encrypt(plaintext);
-    this.ws.send(JSON.stringify(encrypted));
+    const frame = JSON.stringify(encrypted);
+    const chunks = chunkMessage(frame, this.maxMessageSize);
+
+    if (chunks.length === 1) {
+      this.ws.send(frame);
+    } else {
+      const messageId = randomUUID();
+      for (let i = 0; i < chunks.length; i++) {
+        const envelope = buildChunkEnvelope(messageId, i, chunks.length, chunks[i]);
+        this.ws.send(JSON.stringify(envelope));
+      }
+    }
+    console.log(`[Relay] Sent to app: type=${message.type} stream=${message.stream ?? '-'} seq=${message.seq ?? '-'} chunks=${chunks.length}`);
+  }
+
+  private handleChunk(chunk: any): void {
+    const { messageId, index, total, data } = chunk;
+    if (!messageId || typeof index !== 'number' || typeof total !== 'number' || typeof data !== 'string') {
+      console.warn('[Relay] Invalid chunk received, ignoring');
+      return;
+    }
+
+    if (index < 0 || index >= total || total <= 0) {
+      console.warn(`[Relay] Chunk out of range: index=${index} total=${total}`);
+      return;
+    }
+
+    let entry = this.chunkBuffer.get(messageId);
+    if (!entry) {
+      entry = { chunks: new Array(total).fill(null), total, timer: null };
+      entry.timer = setTimeout(() => {
+        console.warn(`[Relay] Chunk reassembly timeout for messageId=${messageId}, discarding`);
+        this.chunkBuffer.delete(messageId);
+      }, this.CHUNK_REASSEMBLY_TIMEOUT);
+      this.chunkBuffer.set(messageId, entry);
+    }
+
+    if (entry.total !== total) {
+      console.warn(`[Relay] Chunk total mismatch for messageId=${messageId}: ${entry.total} vs ${total}`);
+      return;
+    }
+
+    entry.chunks[index] = data;
+
+    if (entry.chunks.every(c => c !== null)) {
+      if (entry.timer) clearTimeout(entry.timer);
+      this.chunkBuffer.delete(messageId);
+      const frame = reassembleMessage(entry.chunks as string[]);
+      try {
+        const encrypted = JSON.parse(frame);
+        this.handleEncryptedMessage(encrypted);
+      } catch (e: any) {
+        console.error('[Relay] Chunk reassembly/decrypt error:', e.message);
+        this.sendError('Chunk parse error', 'BAD_FRAME');
+      }
+    }
+  }
+
+  private clearChunkBuffer(): void {
+    for (const [, entry] of this.chunkBuffer) {
+      if (entry.timer) clearTimeout(entry.timer);
+    }
+    this.chunkBuffer.clear();
   }
 
   private sendError(message: string, code: string = 'INTERNAL'): void {
@@ -719,6 +796,7 @@ export class RelayClient {
   private cleanupConnection(): void {
     this.handshakeState = 'waiting';
     this.seenMessageIds.clear();
+    this.clearChunkBuffer();
     this.stopSseSubscription();
     this.abortActiveStream();
   }

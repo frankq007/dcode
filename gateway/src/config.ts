@@ -11,6 +11,7 @@ export interface GatewayConfig {
   version: string;
   relayKey?: string;
   token?: string;
+  maxMessageSize?: number;
 }
 
 const DEFAULT_CONFIG: GatewayConfig = {
@@ -20,7 +21,8 @@ const DEFAULT_CONFIG: GatewayConfig = {
   relayUrl: 'ws://localhost:8766',
   opencodeUrl: 'http://localhost:3000',
   computerName: 'MyPC',
-  version: '0.1.0'
+  version: '0.1.0',
+  maxMessageSize: 1024 * 1024
 };
 
 export function loadConfig(configPath?: string): GatewayConfig {
