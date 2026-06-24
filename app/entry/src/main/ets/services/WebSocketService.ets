@@ -47,6 +47,29 @@ interface ParsedMessage {
   data?: ErrorData;
 }
 
+interface ChunkEnvelope {
+  type: string;
+  messageId: string;
+  index: number;
+  total: number;
+  data: string;
+}
+
+interface ChunkBuffer {
+  chunks: string[];
+  received: Set<number>;
+  total: number;
+  timer: number;
+}
+
+interface RelayRegisterMsg {
+  type: string;
+  token: string;
+  role: string;
+  version: string;
+  relayKey?: string;
+}
+
 export class WebSocketService {
   private ws: webSocket.WebSocket | null = null;
   private crypto: CryptoService = new CryptoService();
@@ -65,6 +88,7 @@ export class WebSocketService {
   private maxReconnectDelay: number = 30000;
   private reconnectTimer: number | null = null;
   private lastQrData: QRCodeData | null = null;
+  private chunkBuffer: Map<string, ChunkBuffer> = new Map();
 
   private lastSeq: number = 0;
   private isForeground: boolean = true;
@@ -74,6 +98,8 @@ export class WebSocketService {
   private readonly HEARTBEAT_INTERVAL_BACKGROUND: number = 120000;
   private readonly HEARTBEAT_TIMEOUT: number = 20000;
   private readonly PAIRING_TIMEOUT: number = 30000;
+  private readonly MAX_MESSAGE_SIZE: number = 1048576;
+  private readonly CHUNK_REASSEMBLY_TIMEOUT: number = 30000;
   private relayPairingTimeoutTimer: number | null = null;
 
   async connect(qrData: QRCodeData): Promise<void> {
@@ -131,6 +157,7 @@ export class WebSocketService {
           this.relayPairingTimeoutTimer = null;
         }
         this.stopHeartbeat();
+        this.clearChunkBuffer();
         this.notifyConnectionListeners(false);
         this.attemptReconnect();
       });
@@ -150,7 +177,7 @@ export class WebSocketService {
   }
 
   private startRelayPairing(qrData: QRCodeData): void {
-    const registerMsg = {
+    const registerMsg: RelayRegisterMsg = {
       type: 'register',
       token: qrData.token,
       role: 'app',
@@ -209,7 +236,10 @@ export class WebSocketService {
     try {
       const parsed = JSON.parse(messageStr) as ParsedMessage;
 
-      if (this.handshakeState === 'waiting_ack' && parsed.type === 'handshake_ack') {
+      if (this.handshakeState === 'done' && parsed.type === 'chunk') {
+        const envelope = JSON.parse(messageStr) as ChunkEnvelope;
+        this.handleChunk(envelope);
+      } else if (this.handshakeState === 'waiting_ack' && parsed.type === 'handshake_ack') {
         const ack: HandshakeAckMsg = {
           type: parsed.type,
           publicKey: parsed.publicKey || '',
@@ -337,6 +367,59 @@ export class WebSocketService {
     }
   }
 
+  private handleChunk(envelope: ChunkEnvelope): void {
+    const messageId: string = envelope.messageId;
+    const index: number = envelope.index;
+    const total: number = envelope.total;
+    const chunkData: string = envelope.data;
+
+    if (!messageId || index < 0 || index >= total || total <= 0) {
+      console.warn(`[WebSocket] Invalid chunk index: ${index}/${total}`);
+      return;
+    }
+
+    let buffer = this.chunkBuffer.get(messageId);
+    if (!buffer) {
+      const chunks: string[] = new Array(total);
+      buffer = { chunks, received: new Set<number>(), total, timer: 0 };
+      buffer.timer = setTimeout(() => {
+        console.warn(`[WebSocket] Chunk reassembly timeout for messageId: ${messageId}, discarding`);
+        this.chunkBuffer.delete(messageId);
+      }, this.CHUNK_REASSEMBLY_TIMEOUT);
+      this.chunkBuffer.set(messageId, buffer);
+    }
+
+    if (buffer.total !== total) {
+      console.warn(`[WebSocket] Chunk total mismatch for messageId: ${messageId}`);
+      return;
+    }
+
+    if (!buffer.received.has(index)) {
+      buffer.received.add(index);
+    }
+    buffer.chunks[index] = chunkData;
+
+    console.log(`[WebSocket] Chunk received: ${buffer.received.size}/${total} for ${messageId}`);
+
+    if (buffer.received.size >= total) {
+      clearTimeout(buffer.timer);
+      this.chunkBuffer.delete(messageId);
+      const reassembled = buffer.chunks.join('');
+      console.log(`[WebSocket] All chunks received for ${messageId}, reassembling`);
+
+      try {
+        const encrypted = JSON.parse(reassembled) as EncryptedMessage;
+        if (encrypted.iv && encrypted.ciphertext) {
+          this.handleEncryptedMessage(encrypted);
+        } else {
+          console.warn('[WebSocket] Reassembled message missing encryption fields');
+        }
+      } catch (e) {
+        console.error('[WebSocket] Failed to parse reassembled chunk:', e);
+      }
+    }
+  }
+
   async sendMessage(message: Message): Promise<void> {
     if (!this.isConnected || !this.handshakeComplete) {
       console.warn('[WebSocket] Cannot send: not connected or handshake incomplete');
@@ -345,10 +428,42 @@ export class WebSocketService {
 
     try {
       const encrypted = await this.crypto.encrypt(JSON.stringify(message));
-      this.ws?.send(JSON.stringify(encrypted));
+      const frame = JSON.stringify(encrypted);
+
+      if (frame.length <= this.MAX_MESSAGE_SIZE) {
+        this.ws?.send(frame);
+      } else {
+        const chunks = this.chunkFrame(frame);
+        const messageId = `chunk_${Date.now()}_${Math.floor(Math.random() * 1000000)}`;
+        for (let i = 0; i < chunks.length; i++) {
+          const envelope: ChunkEnvelope = {
+            type: 'chunk',
+            messageId,
+            index: i,
+            total: chunks.length,
+            data: chunks[i]
+          };
+          this.ws?.send(JSON.stringify(envelope));
+        }
+      }
     } catch (e) {
       console.error('[WebSocket] Send error:', e);
     }
+  }
+
+  private chunkFrame(frame: string): string[] {
+    const chunks: string[] = [];
+    for (let i = 0; i < frame.length; i += this.MAX_MESSAGE_SIZE) {
+      chunks.push(frame.substring(i, Math.min(i + this.MAX_MESSAGE_SIZE, frame.length)));
+    }
+    return chunks;
+  }
+
+  private clearChunkBuffer(): void {
+    this.chunkBuffer.forEach((buffer: ChunkBuffer) => {
+      clearTimeout(buffer.timer);
+    });
+    this.chunkBuffer.clear();
   }
 
   disconnect(): void {
@@ -363,6 +478,7 @@ export class WebSocketService {
     }
 
     this.stopHeartbeat();
+    this.clearChunkBuffer();
     this.lastQrData = null;
     this.handshakeState = 'idle';
     this.handshakeComplete = false;

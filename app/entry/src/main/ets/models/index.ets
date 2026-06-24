@@ -14,8 +14,8 @@ export interface Connection {
   id: string;
   name: string;
   mode: 'direct' | 'relay';
-  host: string;
-  port: number;
+  host?: string;
+  port?: number;
   publicKey: string;
   token: string;
   relayUrl?: string;

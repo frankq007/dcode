@@ -21,7 +21,9 @@ export struct ConnectionListItem {
           .fontWeight(FontWeight.Medium)
           .fontColor(WX.TEXT)
 
-        Text(`${this.connection.mode === 'direct' ? '直连' : '云转发'} · ${this.connection.host}:${this.connection.port}`)
+        Text(this.connection.mode === 'relay'
+          ? `云转发 · ${this.connection.relayUrl || '中继'}`
+          : `直连 · ${this.connection.host}:${this.connection.port}`)
           .fontSize(WX.FONT_SMALL)
           .fontColor(WX.TEXT_SUB)
           .margin({ top: 4 })

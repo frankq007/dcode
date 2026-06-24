@@ -114,7 +114,9 @@ struct QRScannerPage {
             .fontColor('#666666')
             .margin({ bottom: 4 })
 
-          Text(`地址: ${this.parsedQRData.host}:${this.parsedQRData.port}`)
+          Text(this.parsedQRData.mode === 'relay'
+            ? `地址: ${this.parsedQRData.relayUrl || '中继'}`
+            : `地址: ${this.parsedQRData.host}:${this.parsedQRData.port}`)
             .fontSize(14)
             .fontColor('#666666')
             .margin({ bottom: 16 })
