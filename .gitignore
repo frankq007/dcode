@@ -11,6 +11,7 @@ coverage/
 app/.hvigor/
 app/entry/build/
 app/oh_modules/
+app/entry/oh_modules/
 **/oh-package-lock.json5
 app/build/
 

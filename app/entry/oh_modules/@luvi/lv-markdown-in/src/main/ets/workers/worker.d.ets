@@ -1,3 +1,0 @@
-// @keepTs
-// @ts-nocheck
-export {};
