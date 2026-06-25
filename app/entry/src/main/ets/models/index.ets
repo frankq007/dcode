@@ -49,6 +49,8 @@ export type MessageType =
   | 'token_query'
   | 'history'
   | 'heartbeat'
+  | 'chunk'
+  | 'chunk_resend'
   | 'sync'
   | 'error';
 
@@ -97,6 +99,10 @@ export interface MessageData {
   code?: string;
   message?: string;
   lastSeq?: number;
+  chunkId?: string;
+  seq?: number;
+  payload?: string;
+  missing?: number[];
 }
 
 export interface Message {

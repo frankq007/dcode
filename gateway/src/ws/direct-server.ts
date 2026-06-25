@@ -7,13 +7,23 @@ import { SessionManager } from '../session/session-manager';
 import { OfflineEventBuffer } from '../session/offline-buffer';
 import { GatewayConfig } from '../config';
 import { HandshakeMessage, Message, QRCodeData } from '../types';
-import { chunkMessage, reassembleMessage, buildChunkEnvelope, DEFAULT_MAX_MESSAGE_SIZE } from '../utils/chunker';
+import { chunkMessage, reassembleChunks, missingSeqs, isValidChunk, CHUNK_RESEND_TIMEOUT, CHUNK_REASSEMBLY_TIMEOUT, CHUNK_MAX_RESENDS, SENT_CHUNKS_TTL, DEFAULT_MAX_MESSAGE_SIZE, type Chunk } from '../utils/chunker';
 import { isVersionCompatible } from '../utils/version';
 
 interface PendingChunks {
-  chunks: (string | null)[];
+  chunkId: string;
+  origMsgId: string;
   total: number;
-  timer: NodeJS.Timeout | null;
+  received: Map<number, Chunk>;
+  resendTimer: NodeJS.Timeout | null;
+  resendCount: number;
+  totalTimer: NodeJS.Timeout | null;
+}
+
+interface SentChunks {
+  origMsgId: string;
+  chunks: Chunk[];
+  cleanupTimer: NodeJS.Timeout | null;
 }
 
 export class DirectServer {
@@ -28,7 +38,7 @@ export class DirectServer {
   private offlineBuffer: OfflineEventBuffer = new OfflineEventBuffer();
   private seenMessageIds: Set<string> = new Set();
   private chunkBuffer: Map<string, PendingChunks> = new Map();
-  private readonly CHUNK_REASSEMBLY_TIMEOUT = 30000;
+  private sentChunks: Map<string, SentChunks> = new Map();
   private maxMessageSize = DEFAULT_MAX_MESSAGE_SIZE;
   private pendingSyncSeq: number = -1;
   private sessionInitDone: boolean = false;
@@ -102,6 +112,7 @@ export class DirectServer {
       this.handshakeState = 'waiting';
       this.seenMessageIds.clear();
       this.clearChunkBuffer();
+      this.clearSentChunks();
       if (this.pingTimer) {
         clearInterval(this.pingTimer);
         this.pingTimer = null;
@@ -125,11 +136,13 @@ export class DirectServer {
     if (this.handshakeState === 'complete') {
       try {
         const parsed = JSON.parse(data.toString());
-        if (parsed.type === 'chunk') {
-          this.handleChunk(parsed);
+        const decrypted = this.crypto.decrypt(parsed);
+        const message = JSON.parse(decrypted);
+        if (message.type === 'chunk') {
+          this.handleChunk(message);
+        } else if (message.type === 'chunk_resend') {
+          this.handleChunkResend(message);
         } else {
-          const decrypted = this.crypto.decrypt(parsed);
-          const message = JSON.parse(decrypted);
           this.processDecryptedMessage(message);
         }
       } catch (e: any) {
@@ -791,71 +804,175 @@ export class DirectServer {
     }
 
     const plaintext = JSON.stringify(message);
-    const encrypted = this.crypto.encrypt(plaintext);
-    const frame = JSON.stringify(encrypted);
-    const chunks = chunkMessage(frame, this.maxMessageSize);
+    const chunks = chunkMessage(plaintext, this.maxMessageSize);
 
-    if (chunks.length === 1) {
-      this.appWs.send(frame);
+    if (chunks.length === 0) {
+      const encrypted = this.crypto.encrypt(plaintext);
+      this.appWs.send(JSON.stringify(encrypted));
+      console.log(`[Direct] Sent to app: type=${message.type} stream=${message.stream ?? '-'} seq=${message.seq ?? '-'} chunks=1`);
     } else {
-      const messageId = randomUUID();
-      for (let i = 0; i < chunks.length; i++) {
-        const envelope = buildChunkEnvelope(messageId, i, chunks.length, chunks[i]);
-        this.appWs.send(JSON.stringify(envelope));
+      const chunkId = chunks[0].chunkId;
+      this.cacheSentChunks(chunkId, message.id, chunks);
+      for (const chunk of chunks) {
+        const frame: Message = {
+          type: 'chunk',
+          id: message.id,
+          data: chunk,
+          timestamp: Date.now()
+        };
+        const encrypted = this.crypto.encrypt(JSON.stringify(frame));
+        this.appWs.send(JSON.stringify(encrypted));
       }
+      console.log(`[Direct] Sent to app: type=${message.type} stream=${message.stream ?? '-'} seq=${message.seq ?? '-'} chunks=${chunks.length} chunkId=${chunkId}`);
     }
-    console.log(`[Direct] Sent to app: type=${message.type} stream=${message.stream ?? '-'} seq=${message.seq ?? '-'} chunks=${chunks.length}`);
   }
 
-  private handleChunk(chunk: any): void {
-    const { messageId, index, total, data } = chunk;
-    if (!messageId || typeof index !== 'number' || typeof total !== 'number' || typeof data !== 'string') {
+  private cacheSentChunks(chunkId: string, origMsgId: string, chunks: Chunk[]): void {
+    const existing = this.sentChunks.get(chunkId);
+    if (existing && existing.cleanupTimer) {
+      clearTimeout(existing.cleanupTimer);
+    }
+    const entry: SentChunks = { origMsgId, chunks, cleanupTimer: null };
+    entry.cleanupTimer = setTimeout(() => {
+      this.sentChunks.delete(chunkId);
+    }, SENT_CHUNKS_TTL);
+    this.sentChunks.set(chunkId, entry);
+  }
+
+  private handleChunkResend(message: Message): void {
+    const data = message.data as { chunkId?: string; missing?: number[] };
+    const chunkId = data.chunkId;
+    const missing = data.missing;
+    if (!chunkId || !Array.isArray(missing)) {
+      console.warn('[Direct] Invalid chunk_resend received, ignoring');
+      return;
+    }
+    if (!this.appWs || this.appWs.readyState !== WebSocket.OPEN) return;
+
+    const sent = this.sentChunks.get(chunkId);
+    if (!sent) {
+      console.warn(`[Direct] chunk_resend for unknown chunkId=${chunkId}, ignoring`);
+      return;
+    }
+
+    let resent = 0;
+    for (const seq of missing) {
+      const chunk = sent.chunks.find((c) => c.seq === seq);
+      if (!chunk) continue;
+      const frame: Message = {
+        type: 'chunk',
+        id: sent.origMsgId,
+        data: chunk,
+        timestamp: Date.now()
+      };
+      const encrypted = this.crypto.encrypt(JSON.stringify(frame));
+      this.appWs.send(JSON.stringify(encrypted));
+      resent++;
+    }
+    console.log(`[Direct] Resent ${resent} chunk(s) for chunkId=${chunkId}`);
+  }
+
+  private handleChunk(message: Message): void {
+    if (!isValidChunk(message.data)) {
       console.warn('[Direct] Invalid chunk received, ignoring');
       return;
     }
-    if (index < 0 || index >= total || total <= 0) {
-      console.warn(`[Direct] Chunk out of range: index=${index} total=${total}`);
+    const chunk = message.data as Chunk;
+    const { chunkId, seq, total } = chunk;
+    if (seq < 0 || seq >= total || total <= 0) {
+      console.warn(`[Direct] Chunk out of range: seq=${seq} total=${total}`);
       return;
     }
 
-    let entry = this.chunkBuffer.get(messageId);
+    let entry = this.chunkBuffer.get(chunkId);
     if (!entry) {
-      entry = { chunks: new Array(total).fill(null), total, timer: null };
-      entry.timer = setTimeout(() => {
-        console.warn(`[Direct] Chunk reassembly timeout for messageId=${messageId}, discarding`);
-        this.chunkBuffer.delete(messageId);
-      }, this.CHUNK_REASSEMBLY_TIMEOUT);
-      this.chunkBuffer.set(messageId, entry);
+      entry = {
+        chunkId,
+        origMsgId: message.id,
+        total,
+        received: new Map<number, Chunk>(),
+        resendTimer: null,
+        resendCount: 0,
+        totalTimer: null
+      };
+      entry.totalTimer = setTimeout(() => {
+        console.warn(`[Direct] Chunk total reassembly timeout for chunkId=${chunkId}, discarding`);
+        this.discardPendingChunk(chunkId);
+        this.sendError('Chunk reassembly timeout', 'CHUNK_TIMEOUT');
+      }, CHUNK_REASSEMBLY_TIMEOUT);
+      this.chunkBuffer.set(chunkId, entry);
+      this.scheduleChunkResendCheck(entry);
     }
 
     if (entry.total !== total) {
-      console.warn(`[Direct] Chunk total mismatch for messageId=${messageId}: ${entry.total} vs ${total}`);
+      console.warn(`[Direct] Chunk total mismatch for chunkId=${chunkId}: ${entry.total} vs ${total}`);
       return;
     }
 
-    entry.chunks[index] = data;
+    entry.received.set(seq, chunk);
+    console.log(`[Direct] Chunk received: ${entry.received.size}/${total} for chunkId=${chunkId}`);
 
-    if (entry.chunks.every(c => c !== null)) {
-      if (entry.timer) clearTimeout(entry.timer);
-      this.chunkBuffer.delete(messageId);
-      const frame = reassembleMessage(entry.chunks as string[]);
+    if (entry.received.size >= total) {
+      if (entry.resendTimer) clearTimeout(entry.resendTimer);
+      if (entry.totalTimer) clearTimeout(entry.totalTimer);
+      this.chunkBuffer.delete(chunkId);
+      const ordered = Array.from(entry.received.values());
       try {
-        const encrypted = JSON.parse(frame);
-        const decrypted = this.crypto.decrypt(encrypted);
-        const message = JSON.parse(decrypted);
-        this.processDecryptedMessage(message);
+        const plaintext = reassembleChunks(ordered);
+        const original = JSON.parse(plaintext);
+        this.processDecryptedMessage(original);
       } catch (e: any) {
-        console.error('[Direct] Chunk reassembly/decrypt error:', e.message);
+        console.error('[Direct] Chunk reassembly error:', e.message);
         this.sendError('Chunk parse error', 'BAD_FRAME');
       }
     }
   }
 
+  private scheduleChunkResendCheck(entry: PendingChunks): void {
+    if (entry.resendTimer) clearTimeout(entry.resendTimer);
+    entry.resendTimer = setTimeout(() => {
+      if (entry.received.size >= entry.total) return;
+      if (entry.resendCount >= CHUNK_MAX_RESENDS) {
+        console.warn(`[Direct] Chunk resend exhausted for chunkId=${entry.chunkId}, discarding`);
+        this.discardPendingChunk(entry.chunkId);
+        this.sendError('Chunk reassembly timeout', 'CHUNK_TIMEOUT');
+        return;
+      }
+      const missing = missingSeqs(entry.total, new Set(entry.received.keys()));
+      if (missing.length === 0) return;
+      entry.resendCount++;
+      console.log(`[Direct] Requesting chunk resend: chunkId=${entry.chunkId} missing=${JSON.stringify(missing)} round=${entry.resendCount}`);
+      this.sendEncryptedMessage({
+        type: 'chunk_resend',
+        id: randomUUID(),
+        data: { chunkId: entry.chunkId, missing },
+        timestamp: Date.now()
+      });
+      this.scheduleChunkResendCheck(entry);
+    }, CHUNK_RESEND_TIMEOUT);
+  }
+
+  private discardPendingChunk(chunkId: string): void {
+    const entry = this.chunkBuffer.get(chunkId);
+    if (!entry) return;
+    if (entry.resendTimer) clearTimeout(entry.resendTimer);
+    if (entry.totalTimer) clearTimeout(entry.totalTimer);
+    this.chunkBuffer.delete(chunkId);
+  }
+
   private clearChunkBuffer(): void {
     for (const [, entry] of this.chunkBuffer) {
-      if (entry.timer) clearTimeout(entry.timer);
+      if (entry.resendTimer) clearTimeout(entry.resendTimer);
+      if (entry.totalTimer) clearTimeout(entry.totalTimer);
     }
     this.chunkBuffer.clear();
+  }
+
+  private clearSentChunks(): void {
+    for (const [, entry] of this.sentChunks) {
+      if (entry.cleanupTimer) clearTimeout(entry.cleanupTimer);
+    }
+    this.sentChunks.clear();
   }
 
   private sendError(message: string, code: string = 'INTERNAL'): void {

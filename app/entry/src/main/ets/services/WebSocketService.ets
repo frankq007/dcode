@@ -47,19 +47,29 @@ interface ParsedMessage {
   data?: ErrorData;
 }
 
-interface ChunkEnvelope {
-  type: string;
-  messageId: string;
-  index: number;
+interface ChunkData {
+  chunkId: string;
+  seq: number;
   total: number;
-  data: string;
+  payload: string;
+  status: string;
 }
 
-interface ChunkBuffer {
-  chunks: string[];
-  received: Set<number>;
+interface ChunkBufferEntry {
+  chunkId: string;
+  origMsgId: string;
   total: number;
-  timer: number;
+  chunks: ChunkData[];
+  receivedCount: number;
+  resendTimer: number;
+  resendCount: number;
+  totalTimer: number;
+}
+
+interface SentChunksEntry {
+  origMsgId: string;
+  chunks: ChunkData[];
+  cleanupTimer: number;
 }
 
 interface RelayRegisterMsg {
@@ -88,7 +98,8 @@ export class WebSocketService {
   private maxReconnectDelay: number = 30000;
   private reconnectTimer: number | null = null;
   private lastQrData: QRCodeData | null = null;
-  private chunkBuffer: Map<string, ChunkBuffer> = new Map();
+  private chunkBuffer: Map<string, ChunkBufferEntry> = new Map();
+  private sentChunks: Map<string, SentChunksEntry> = new Map();
 
   private lastSeq: number = 0;
   private isForeground: boolean = true;
@@ -100,6 +111,9 @@ export class WebSocketService {
   private readonly PAIRING_TIMEOUT: number = 30000;
   private readonly MAX_MESSAGE_SIZE: number = 1048576;
   private readonly CHUNK_REASSEMBLY_TIMEOUT: number = 30000;
+  private readonly CHUNK_RESEND_TIMEOUT: number = 5000;
+  private readonly CHUNK_MAX_RESENDS: number = 3;
+  private readonly SENT_CHUNKS_TTL: number = 60000;
   private relayPairingTimeoutTimer: number | null = null;
 
   async connect(qrData: QRCodeData): Promise<void> {
@@ -158,6 +172,7 @@ export class WebSocketService {
         }
         this.stopHeartbeat();
         this.clearChunkBuffer();
+        this.clearSentChunks();
         this.notifyConnectionListeners(false);
         this.attemptReconnect();
       });
@@ -236,10 +251,7 @@ export class WebSocketService {
     try {
       const parsed = JSON.parse(messageStr) as ParsedMessage;
 
-      if (this.handshakeState === 'done' && parsed.type === 'chunk') {
-        const envelope = JSON.parse(messageStr) as ChunkEnvelope;
-        this.handleChunk(envelope);
-      } else if (this.handshakeState === 'waiting_ack' && parsed.type === 'handshake_ack') {
+      if (this.handshakeState === 'waiting_ack' && parsed.type === 'handshake_ack') {
         const ack: HandshakeAckMsg = {
           type: parsed.type,
           publicKey: parsed.publicKey || '',
@@ -363,74 +375,219 @@ export class WebSocketService {
     try {
       const decrypted = await this.crypto.decrypt(encrypted);
       const message = JSON.parse(decrypted) as Message;
-      if (message.type === 'session_switch') {
-        this.lastSeq = 0;
-        console.log('[WebSocket] Session switched - lastSeq reset');
-      }
-      if (message.seq && message.seq > this.lastSeq) {
-        this.lastSeq = message.seq;
-      }
-      if (message.type === 'heartbeat') {
-        this.clearHeartbeatTimeout();
+      if (message.type === 'chunk') {
+        this.handleChunk(message);
         return;
       }
-      this.notifyMessageListeners(message);
+      if (message.type === 'chunk_resend') {
+        this.handleChunkResend(message);
+        return;
+      }
+      this.processDecryptedMessage(message);
     } catch (e) {
       console.error('[WebSocket] Decrypt error:', e);
     }
   }
 
-  private handleChunk(envelope: ChunkEnvelope): void {
-    const messageId: string = envelope.messageId;
-    const index: number = envelope.index;
-    const total: number = envelope.total;
-    const chunkData: string = envelope.data;
+  private processDecryptedMessage(message: Message): void {
+    if (message.type === 'session_switch') {
+      this.lastSeq = 0;
+      console.log('[WebSocket] Session switched - lastSeq reset');
+    }
+    if (message.seq && message.seq > this.lastSeq) {
+      this.lastSeq = message.seq;
+    }
+    if (message.type === 'heartbeat') {
+      this.clearHeartbeatTimeout();
+      return;
+    }
+    this.notifyMessageListeners(message);
+  }
 
-    if (!messageId || index < 0 || index >= total || total <= 0) {
-      console.warn(`[WebSocket] Invalid chunk index: ${index}/${total}`);
+  private handleChunk(message: Message): void {
+    const data = message.data;
+    const chunkId: string = data.chunkId || '';
+    const seq: number = data.seq ?? -1;
+    const total: number = data.total ?? 0;
+    const payload: string = data.payload || '';
+    const status: string = data.status || '';
+
+    if (!chunkId || seq < 0 || seq >= total || total <= 0) {
+      console.warn(`[WebSocket] Invalid chunk: seq=${seq}/${total}`);
+      return;
+    }
+    if (status !== 'start' && status !== 'data' && status !== 'end') {
+      console.warn(`[WebSocket] Invalid chunk status: ${status}`);
       return;
     }
 
-    let buffer = this.chunkBuffer.get(messageId);
-    if (!buffer) {
-      const chunks: string[] = new Array(total);
-      buffer = { chunks, received: new Set<number>(), total, timer: 0 };
-      buffer.timer = setTimeout(() => {
-        console.warn(`[WebSocket] Chunk reassembly timeout for messageId: ${messageId}, discarding`);
-        this.chunkBuffer.delete(messageId);
+    let entry = this.chunkBuffer.get(chunkId);
+    if (!entry) {
+      const chunks: ChunkData[] = new Array(total);
+      entry = {
+        chunkId,
+        origMsgId: message.id,
+        total,
+        chunks,
+        receivedCount: 0,
+        resendTimer: 0,
+        resendCount: 0,
+        totalTimer: 0
+      };
+      entry.totalTimer = setTimeout(() => {
+        console.warn(`[WebSocket] Chunk total reassembly timeout for chunkId: ${chunkId}, discarding`);
+        this.discardPendingChunk(chunkId);
+        this.notifyMessageListeners(this.buildChunkTimeoutError(chunkId));
       }, this.CHUNK_REASSEMBLY_TIMEOUT);
-      this.chunkBuffer.set(messageId, buffer);
+      this.chunkBuffer.set(chunkId, entry);
+      this.scheduleChunkResendCheck(entry);
     }
 
-    if (buffer.total !== total) {
-      console.warn(`[WebSocket] Chunk total mismatch for messageId: ${messageId}`);
+    if (entry.total !== total) {
+      console.warn(`[WebSocket] Chunk total mismatch for chunkId: ${chunkId}`);
       return;
     }
 
-    if (!buffer.received.has(index)) {
-      buffer.received.add(index);
+    if (entry.chunks[seq] === undefined || entry.chunks[seq] === null) {
+      const chunk: ChunkData = { chunkId, seq, total, payload, status };
+      entry.chunks[seq] = chunk;
+      entry.receivedCount++;
     }
-    buffer.chunks[index] = chunkData;
 
-    console.log(`[WebSocket] Chunk received: ${buffer.received.size}/${total} for ${messageId}`);
+    console.log(`[WebSocket] Chunk received: ${entry.receivedCount}/${total} for ${chunkId}`);
 
-    if (buffer.received.size >= total) {
-      clearTimeout(buffer.timer);
-      this.chunkBuffer.delete(messageId);
-      const reassembled = buffer.chunks.join('');
-      console.log(`[WebSocket] All chunks received for ${messageId}, reassembling`);
-
-      try {
-        const encrypted = JSON.parse(reassembled) as EncryptedMessage;
-        if (encrypted.iv && encrypted.ciphertext) {
-          this.handleEncryptedMessage(encrypted);
-        } else {
-          console.warn('[WebSocket] Reassembled message missing encryption fields');
+    if (entry.receivedCount >= total) {
+      if (entry.resendTimer) {
+        clearTimeout(entry.resendTimer);
+        entry.resendTimer = 0;
+      }
+      if (entry.totalTimer) {
+        clearTimeout(entry.totalTimer);
+        entry.totalTimer = 0;
+      }
+      this.chunkBuffer.delete(chunkId);
+      const ordered: ChunkData[] = [];
+      for (let i = 0; i < total; i++) {
+        const c = entry.chunks[i];
+        if (c) {
+          ordered.push(c);
         }
+      }
+      try {
+        const plaintext = this.reassembleChunks(ordered);
+        const original = JSON.parse(plaintext) as Message;
+        this.processDecryptedMessage(original);
       } catch (e) {
-        console.error('[WebSocket] Failed to parse reassembled chunk:', e);
+        console.error('[WebSocket] Failed to reassemble chunk:', e);
       }
     }
+  }
+
+  private scheduleChunkResendCheck(entry: ChunkBufferEntry): void {
+    if (entry.resendTimer) {
+      clearTimeout(entry.resendTimer);
+    }
+    entry.resendTimer = setTimeout(() => {
+      if (entry.receivedCount >= entry.total) {
+        return;
+      }
+      if (entry.resendCount >= this.CHUNK_MAX_RESENDS) {
+        console.warn(`[WebSocket] Chunk resend exhausted for chunkId: ${entry.chunkId}, discarding`);
+        this.discardPendingChunk(entry.chunkId);
+        this.notifyMessageListeners(this.buildChunkTimeoutError(entry.chunkId));
+        return;
+      }
+      const missing: number[] = [];
+      for (let i = 0; i < entry.total; i++) {
+        if (entry.chunks[i] === undefined || entry.chunks[i] === null) {
+          missing.push(i);
+        }
+      }
+      if (missing.length === 0) {
+        return;
+      }
+      entry.resendCount++;
+      console.log(`[WebSocket] Requesting chunk resend: chunkId=${entry.chunkId} missing=${JSON.stringify(missing)} round=${entry.resendCount}`);
+      this.sendMessage({
+        type: 'chunk_resend',
+        id: `resend_${Date.now()}_${Math.floor(Math.random() * 1000000)}`,
+        data: { chunkId: entry.chunkId, missing },
+        timestamp: Date.now()
+      });
+      this.scheduleChunkResendCheck(entry);
+    }, this.CHUNK_RESEND_TIMEOUT);
+  }
+
+  private discardPendingChunk(chunkId: string): void {
+    const entry = this.chunkBuffer.get(chunkId);
+    if (!entry) {
+      return;
+    }
+    if (entry.resendTimer) {
+      clearTimeout(entry.resendTimer);
+      entry.resendTimer = 0;
+    }
+    if (entry.totalTimer) {
+      clearTimeout(entry.totalTimer);
+      entry.totalTimer = 0;
+    }
+    this.chunkBuffer.delete(chunkId);
+  }
+
+  private buildChunkTimeoutError(chunkId: string): Message {
+    return {
+      type: 'error',
+      id: `chunk_err_${Date.now()}`,
+      data: { message: '大消息传输失败', code: 'CHUNK_TIMEOUT', chunkId },
+      timestamp: Date.now()
+    };
+  }
+
+  private handleChunkResend(message: Message): void {
+    const chunkId: string = message.data.chunkId || '';
+    const missing: number[] = message.data.missing || [];
+    if (!chunkId || !this.isConnected || !this.handshakeComplete) {
+      return;
+    }
+
+    const sent = this.sentChunks.get(chunkId);
+    if (!sent) {
+      console.warn(`[WebSocket] chunk_resend for unknown chunkId=${chunkId}, ignoring`);
+      return;
+    }
+
+    let resent = 0;
+    for (let i = 0; i < missing.length; i++) {
+      const seq = missing[i];
+      const chunk = sent.chunks[seq];
+      if (!chunk) {
+        continue;
+      }
+      this.sendChunkFrame(sent.origMsgId, chunk).then(() => {
+        // chunk frame sent
+      }).catch((e: Error) => {
+        console.error('[WebSocket] Resend chunk frame error:', e);
+      });
+      resent++;
+    }
+    console.log(`[WebSocket] Resent ${resent} chunk(s) for chunkId=${chunkId}`);
+  }
+
+  private async sendChunkFrame(origMsgId: string, chunk: ChunkData): Promise<void> {
+    const frame: Message = {
+      type: 'chunk',
+      id: origMsgId,
+      data: {
+        chunkId: chunk.chunkId,
+        seq: chunk.seq,
+        total: chunk.total,
+        payload: chunk.payload,
+        status: chunk.status
+      },
+      timestamp: Date.now()
+    };
+    const encrypted = await this.crypto.encrypt(JSON.stringify(frame));
+    this.ws?.send(JSON.stringify(encrypted));
   }
 
   async sendMessage(message: Message): Promise<void> {
@@ -440,43 +597,121 @@ export class WebSocketService {
     }
 
     try {
-      const encrypted = await this.crypto.encrypt(JSON.stringify(message));
-      const frame = JSON.stringify(encrypted);
+      const plaintext = JSON.stringify(message);
+      const chunks = this.buildChunks(plaintext);
 
-      if (frame.length <= this.MAX_MESSAGE_SIZE) {
-        this.ws?.send(frame);
+      if (chunks.length === 0) {
+        const encrypted = await this.crypto.encrypt(plaintext);
+        this.ws?.send(JSON.stringify(encrypted));
       } else {
-        const chunks = this.chunkFrame(frame);
-        const messageId = `chunk_${Date.now()}_${Math.floor(Math.random() * 1000000)}`;
+        const chunkId = chunks[0].chunkId;
+        this.cacheSentChunks(chunkId, message.id, chunks);
         for (let i = 0; i < chunks.length; i++) {
-          const envelope: ChunkEnvelope = {
-            type: 'chunk',
-            messageId,
-            index: i,
-            total: chunks.length,
-            data: chunks[i]
-          };
-          this.ws?.send(JSON.stringify(envelope));
+          await this.sendChunkFrame(message.id, chunks[i]);
         }
+        console.log(`[WebSocket] Sent chunked message: type=${message.type} chunks=${chunks.length} chunkId=${chunkId}`);
       }
     } catch (e) {
       console.error('[WebSocket] Send error:', e);
     }
   }
 
-  private chunkFrame(frame: string): string[] {
-    const chunks: string[] = [];
-    for (let i = 0; i < frame.length; i += this.MAX_MESSAGE_SIZE) {
-      chunks.push(frame.substring(i, Math.min(i + this.MAX_MESSAGE_SIZE, frame.length)));
+  private buildChunks(plaintext: string): ChunkData[] {
+    const encoder = new util.TextEncoder();
+    const encoded: Uint8Array = encoder.encodeInto(plaintext);
+
+    if (encoded.length <= this.MAX_MESSAGE_SIZE) {
+      return [];
+    }
+
+    const chunkId = this.generateChunkId();
+    const base64 = new util.Base64Helper();
+    const fragments: string[] = [];
+    let offset = 0;
+    while (offset < encoded.length) {
+      const end = Math.min(offset + this.MAX_MESSAGE_SIZE, encoded.length);
+      const slice = encoded.subarray(offset, end);
+      fragments.push(base64.encodeToStringSync(slice));
+      offset = end;
+    }
+
+    const total = fragments.length;
+    const chunks: ChunkData[] = [];
+    for (let i = 0; i < fragments.length; i++) {
+      let status: string;
+      if (i === 0) {
+        status = 'start';
+      } else if (i === total - 1) {
+        status = 'end';
+      } else {
+        status = 'data';
+      }
+      chunks.push({
+        chunkId,
+        seq: i,
+        total,
+        payload: fragments[i],
+        status
+      });
     }
     return chunks;
   }
 
+  private reassembleChunks(chunks: ChunkData[]): string {
+    const sorted: ChunkData[] = chunks.sort((a: ChunkData, b: ChunkData) => a.seq - b.seq);
+    const base64 = new util.Base64Helper();
+    const decoder = new util.TextDecoder();
+    let totalLen = 0;
+    const decoded: Uint8Array[] = [];
+    for (let i = 0; i < sorted.length; i++) {
+      const bytes = base64.decodeSync(sorted[i].payload);
+      decoded.push(bytes);
+      totalLen += bytes.length;
+    }
+    const concat = new Uint8Array(totalLen);
+    let off = 0;
+    for (let i = 0; i < decoded.length; i++) {
+      concat.set(decoded[i], off);
+      off += decoded[i].length;
+    }
+    return decoder.decodeToString(concat);
+  }
+
+  private generateChunkId(): string {
+    return `chunk_${Date.now()}_${Math.floor(Math.random() * 1000000)}`;
+  }
+
+  private cacheSentChunks(chunkId: string, origMsgId: string, chunks: ChunkData[]): void {
+    const existing = this.sentChunks.get(chunkId);
+    if (existing && existing.cleanupTimer) {
+      clearTimeout(existing.cleanupTimer);
+    }
+    const entry: SentChunksEntry = { origMsgId, chunks, cleanupTimer: 0 };
+    entry.cleanupTimer = setTimeout(() => {
+      this.sentChunks.delete(chunkId);
+    }, this.SENT_CHUNKS_TTL);
+    this.sentChunks.set(chunkId, entry);
+  }
+
   private clearChunkBuffer(): void {
-    this.chunkBuffer.forEach((buffer: ChunkBuffer) => {
-      clearTimeout(buffer.timer);
+    this.chunkBuffer.forEach((buffer: ChunkBufferEntry) => {
+      if (buffer.resendTimer) {
+        clearTimeout(buffer.resendTimer);
+      }
+      if (buffer.totalTimer) {
+        clearTimeout(buffer.totalTimer);
+      }
     });
     this.chunkBuffer.clear();
+  }
+
+  private clearSentChunks(): void {
+    this.sentChunks.forEach((entry: SentChunksEntry) => {
+      if (entry.cleanupTimer) {
+        clearTimeout(entry.cleanupTimer);
+      }
+    });
+    this.sentChunks.clear();
   }
 
   disconnect(): void {
@@ -492,6 +727,7 @@ export class WebSocketService {
 
     this.stopHeartbeat();
     this.clearChunkBuffer();
+    this.clearSentChunks();
     this.lastQrData = null;
     this.handshakeState = 'idle';
     this.handshakeComplete = false;
