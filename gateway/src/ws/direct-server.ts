@@ -8,6 +8,7 @@ import { OfflineEventBuffer } from '../session/offline-buffer';
 import { GatewayConfig } from '../config';
 import { HandshakeMessage, Message, QRCodeData } from '../types';
 import { chunkMessage, reassembleMessage, buildChunkEnvelope, DEFAULT_MAX_MESSAGE_SIZE } from '../utils/chunker';
+import { isVersionCompatible } from '../utils/version';
 
 interface PendingChunks {
   chunks: (string | null)[];
@@ -35,6 +36,7 @@ export class DirectServer {
   private messageQueue: Message[] = [];
   private isProcessingMessage: boolean = false;
   private sseStarted: boolean = false;
+  private qrExpiresAt: number | null = null;
   private activeStream: {
     sessionId: string;
     thinkingId: string;
@@ -154,6 +156,24 @@ export class DirectServer {
         ws.send(JSON.stringify({ type: 'error', data: { code: 'INVALID_TOKEN', message: 'Token invalid' } }));
         ws.close();
         return;
+      }
+
+      if (this.qrExpiresAt && Date.now() > this.qrExpiresAt) {
+        console.warn('[Direct] QR code expired, rejecting connection');
+        ws.send(JSON.stringify({ type: 'error', data: { code: 'EXPIRED_QR', message: 'QR code expired, please refresh' } }));
+        ws.close();
+        return;
+      }
+
+      const versionCheck = isVersionCompatible(this.config.version, msg.version);
+      if (!versionCheck.compatible) {
+        console.warn(`[Direct] Version mismatch: local=${this.config.version} remote=${msg.version}`);
+        ws.send(JSON.stringify({ type: 'error', data: { code: 'VERSION_MISMATCH', message: `Version incompatible: local=${this.config.version} remote=${msg.version}` } }));
+        ws.close();
+        return;
+      }
+      if (versionCheck.warning) {
+        console.warn(`[Direct] ${versionCheck.warning}`);
       }
 
       const gatewayNonce = randomBytes(16).toString('base64');
@@ -849,13 +869,16 @@ export class DirectServer {
 
 
   private async printQRCode(): Promise<void> {
+    const expiresAt = Date.now() + 10 * 60 * 1000;
+    this.qrExpiresAt = expiresAt;
     const qrData: QRCodeData = {
       mode: 'direct',
       name: this.config.computerName,
       host: this.getLocalIP(),
       port: this.config.port,
       publicKey: this.crypto.getPublicKeyBase64(),
-      token: this.token
+      token: this.token,
+      expiresAt
     };
 
     const qrString = JSON.stringify(qrData);

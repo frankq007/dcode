@@ -253,13 +253,26 @@ export class WebSocketService {
         await this.handleEncryptedMessage(encrypted);
       } else if (parsed.type === 'error') {
         console.error('[WebSocket] Server error:', parsed.data?.message);
-        const errorMsg: Message = {
-          type: 'error',
-          id: '',
-          data: { message: parsed.data?.message || 'Unknown error', code: parsed.data?.code },
-          timestamp: Date.now()
-        };
-        this.notifyMessageListeners(errorMsg);
+        const code = parsed.data?.code;
+        if (code === 'VERSION_MISMATCH') {
+          this.reconnectAttempts = this.maxReconnectAttempts;
+          const errorMsg: Message = {
+            type: 'error',
+            id: '',
+            data: { message: '版本不兼容，请升级应用', code: 'VERSION_MISMATCH' },
+            timestamp: Date.now()
+          };
+          this.notifyMessageListeners(errorMsg);
+          this.ws?.close();
+        } else {
+          const errorMsg: Message = {
+            type: 'error',
+            id: '',
+            data: { message: parsed.data?.message || 'Unknown error', code },
+            timestamp: Date.now()
+          };
+          this.notifyMessageListeners(errorMsg);
+        }
       } else if (parsed.type === 'paired') {
         console.log('[WebSocket] Paired via relay');
         if (this.relayPairingTimeoutTimer) {

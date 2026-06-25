@@ -7,6 +7,7 @@ import { OfflineEventBuffer } from '../session/offline-buffer';
 import { GatewayConfig } from '../config';
 import { HandshakeMessage, Message, QRCodeData } from '../types';
 import { chunkMessage, reassembleMessage, buildChunkEnvelope, DEFAULT_MAX_MESSAGE_SIZE } from '../utils/chunker';
+import { isVersionCompatible } from '../utils/version';
 
 interface PendingChunks {
   chunks: (string | null)[];
@@ -138,6 +139,16 @@ export class RelayClient {
         console.warn('[Relay] Invalid token, rejecting');
         this.ws?.send(JSON.stringify({ type: 'error', data: { code: 'INVALID_TOKEN', message: 'Token invalid' } }));
         return;
+      }
+
+      const versionCheck = isVersionCompatible(this.config.version, msg.version);
+      if (!versionCheck.compatible) {
+        console.warn(`[Relay] Version mismatch: local=${this.config.version} remote=${msg.version}`);
+        this.ws?.send(JSON.stringify({ type: 'error', data: { code: 'VERSION_MISMATCH', message: `Version incompatible: local=${this.config.version} remote=${msg.version}` } }));
+        return;
+      }
+      if (versionCheck.warning) {
+        console.warn(`[Relay] ${versionCheck.warning}`);
       }
 
       const gatewayNonce = randomBytes(16).toString('base64');

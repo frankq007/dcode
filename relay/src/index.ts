@@ -281,17 +281,22 @@ export class RelayServer {
   }
 }
 
-const port = parseInt(process.env.RELAY_PORT || '8766', 10);
-const server = new RelayServer(port);
+// Only start server when run directly (not when imported by tests)
+const isMainModule = typeof require !== 'undefined' && require.main === module;
+if (isMainModule) {
+  const port = parseInt(process.env.RELAY_PORT || '8766', 10);
+  const server = new RelayServer(port);
+  console.log('[Relay] Server started on port', port);
 
-process.on('SIGINT', () => {
-  console.log('\n[Relay] Shutting down...');
-  server.stop();
-  process.exit(0);
-});
+  process.on('SIGINT', () => {
+    console.log('\n[Relay] Shutting down...');
+    server.stop();
+    process.exit(0);
+  });
 
-process.on('SIGTERM', () => {
-  console.log('\n[Relay] Shutting down...');
-  server.stop();
-  process.exit(0);
-});
+  process.on('SIGTERM', () => {
+    console.log('\n[Relay] Shutting down...');
+    server.stop();
+    process.exit(0);
+  });
+}
